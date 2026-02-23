@@ -97,6 +97,22 @@ app.post('/api/tasks/:id/stop', (req, res) => {
   res.json({ ok: true });
 });
 
+app.delete('/api/projects/:id', (req, res) => {
+  const { id } = req.params;
+  const ok = db.deleteProject(id);
+  if (!ok) return res.status(404).json({ error: 'project not found' });
+  res.json({ ok: true, deleted: id });
+});
+
+app.delete('/api/tasks/:id', (req, res) => {
+  const { id } = req.params;
+  const task = db.getTask(id);
+  if (task?.tmux_session) ptyManager.killSession(task.tmux_session);
+  const ok = db.deleteTask(id);
+  if (!ok) return res.status(404).json({ error: 'task not found' });
+  res.json({ ok: true, deleted: id });
+});
+
 app.get('/api/tasks/:id/chat/history', (req, res) => {
   const { id } = req.params;
   const task = db.getTask(id);

@@ -123,6 +123,17 @@ function clearTaskChatMessages(taskId) {
   db.prepare('DELETE FROM task_chat_messages WHERE task_id = ?').run(taskId);
 }
 
+function deleteProject(id) {
+  db.prepare('DELETE FROM tasks WHERE project_id = ?').run(id);
+  const result = db.prepare('DELETE FROM projects WHERE id = ?').run(id);
+  return result.changes > 0;
+}
+
+function deleteTask(id) {
+  const result = db.prepare('DELETE FROM tasks WHERE id = ?').run(id);
+  return result.changes > 0;
+}
+
 module.exports = {
   getProjects,
   getProject,
@@ -134,4 +145,6 @@ module.exports = {
   getTaskChatMessages,
   appendTaskChatMessage,
   clearTaskChatMessages,
+  deleteProject,
+  deleteTask,
 };
