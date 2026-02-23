@@ -66,6 +66,18 @@ function createProject(data) {
   return { id, ...data };
 }
 
+function updateProject(id, data) {
+  const fields = [];
+  const values = [];
+  if (data.name !== undefined) { fields.push('name = ?'); values.push(data.name); }
+  if (data.repo_path !== undefined) { fields.push('repo_path = ?'); values.push(data.repo_path); }
+  if (data.ssh_host !== undefined) { fields.push('ssh_host = ?'); values.push(data.ssh_host); }
+  if (fields.length === 0) return getProject(id);
+  values.push(id);
+  db.prepare(`UPDATE projects SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+  return getProject(id);
+}
+
 function getTasks(projectId) {
   if (projectId) {
     return db.prepare('SELECT * FROM tasks WHERE project_id = ? ORDER BY created_at DESC').all(projectId);
@@ -143,6 +155,7 @@ module.exports = {
   getProjects,
   getProject,
   createProject,
+  updateProject,
   getTasks,
   getTask,
   createTask,

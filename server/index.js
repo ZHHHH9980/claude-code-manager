@@ -39,6 +39,14 @@ app.post('/api/projects', (req, res) => {
   res.json(project);
 });
 
+app.put('/api/projects/:id', (req, res) => {
+  const { id } = req.params;
+  const existing = db.getProject(id);
+  if (!existing) return res.status(404).json({ error: 'project not found' });
+  const updated = db.updateProject(id, req.body);
+  res.json(updated);
+});
+
 // Tasks
 app.get('/api/tasks', (req, res) => {
   const { projectId } = req.query;
