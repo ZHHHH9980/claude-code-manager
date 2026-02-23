@@ -113,7 +113,8 @@ function selfDeploy() {
   if (deploying) return Promise.resolve('already deploying');
   deploying = true;
   return new Promise((resolve, reject) => {
-    const cmd = `cd ${ROOT_DIR} && git pull origin main && npm install && cd client && npm install && npm run build && cd .. && npm rebuild`;
+    const nvm = 'export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && nvm use 22 2>/dev/null;';
+    const cmd = `${nvm} cd ${ROOT_DIR} && git checkout -- . && git pull origin main && npm install && cd client && npm install && npm run build && cd .. && npm rebuild`;
     exec(cmd, { timeout: 120000 }, (err, stdout, stderr) => {
       deploying = false;
       if (err) return reject(err);
