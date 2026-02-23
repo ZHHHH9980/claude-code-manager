@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react';
 import { Bubble, Sender } from '@ant-design/x';
 
 export function ChatWindow({
@@ -15,11 +16,30 @@ export function ChatWindow({
   endRef,
   className = '',
 }) {
-  const items = messages.map((msg, idx) => ({
+  const scrollRef = useRef(null);
+  const localEndRef = useRef(null);
+  const prevItemCountRef = useRef(0);
+  const [stickToBottom, setStickToBottom] = useState(true);
+
+  const items = messages
+    .filter((msg) => !(msg.role === 'assistant' && !String(msg.text ?? '').trim()))
+    .map((msg, idx) => ({
     key: `${msg.role}-${idx}`,
     role: msg.role === 'user' ? 'user' : 'assistant',
     content: msg.text,
-  }));
+    }));
+
+  useEffect(() => {
+    const viewport = scrollRef.current;
+    const target = endRef?.current || localEndRef.current;
+    if (!viewport || !target || !stickToBottom) {
+      prevItemCountRef.current = items.length;
+      return;
+    }
+    const hasNewItem = items.length > prevItemCountRef.current;
+    target.scrollIntoView({ behavior: hasNewItem ? 'smooth' : 'auto', block: 'end' });
+    prevItemCountRef.current = items.length;
+  }, [items, endRef, stickToBottom]);
 
   const roles = {
     user: {
@@ -78,7 +98,15 @@ export function ChatWindow({
         </div>
       )}
 
-      <div className="flex-1 min-h-0 overflow-y-auto px-3 md:px-4 py-3">
+      <div
+        ref={scrollRef}
+        className="flex-1 min-h-0 overflow-y-auto px-3 md:px-4 py-3"
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 64;
+          setStickToBottom(nearBottom);
+        }}
+      >
         {messages.length === 0 && (
           <div className="text-xs" style={{ color: 'var(--text-3)' }}>
             No messages yet.
@@ -87,13 +115,12 @@ export function ChatWindow({
 
         {messages.length > 0 && (
           <Bubble.List
-            autoScroll
             items={items}
             role={roles}
             style={{ background: 'transparent' }}
           />
         )}
-        <div ref={endRef} />
+        <div ref={endRef || localEndRef} />
       </div>
 
       <div className="px-3 py-3 border-t shrink-0" style={{ borderColor: 'var(--border)' }}>

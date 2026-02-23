@@ -6,7 +6,8 @@
     "build": "vite build",
     "mobile:check": "node ./scripts/mobile-check.mjs",
     "mobile:build-check": "npm run mobile:check && npm run build",
-    "mcp:mobile": "node ./scripts/mcp-mobile-smoke.mjs"
+    "mcp:mobile": "node ./scripts/mcp-mobile-smoke.mjs",
+    "mcp:task-close": "node ./scripts/mcp-task-modal-close.mjs"
   },
   "dependencies": {
     "@ant-design/x": "^2.2.2",

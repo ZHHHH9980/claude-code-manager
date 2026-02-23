@@ -3,6 +3,8 @@ import { ProjectList } from './components/ProjectList';
 import { TaskBoard } from './components/TaskBoard';
 import { ChatWindow } from './components/ChatWindow';
 
+const TASK_CHAT_STORAGE_KEY = 'ccm-task-chat-store-v1';
+
 function createDiagStart() {
   return {
     phase: 'sending',
@@ -78,10 +80,21 @@ export default function App() {
 
   const [taskChatInput, setTaskChatInput] = useState('');
   const [taskChatMessages, setTaskChatMessages] = useState([]);
+  const [taskChatStore, setTaskChatStore] = useState(() => {
+    try {
+      const raw = localStorage.getItem(TASK_CHAT_STORAGE_KEY);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  });
   const [taskLoading, setTaskLoading] = useState(false);
   const [taskChatDiag, setTaskChatDiag] = useState(null);
   const taskChatEndRef = useRef(null);
   const taskAbortRef = useRef(null);
+  const taskChatHydratedRef = useRef(null);
   const [nowTs, setNowTs] = useState(Date.now());
 
   const [theme, setTheme] = useState(() => {
@@ -96,6 +109,17 @@ export default function App() {
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem('ccm-theme', theme);
   }, [theme]);
+
+  useEffect(() => {
+    localStorage.setItem(TASK_CHAT_STORAGE_KEY, JSON.stringify(taskChatStore));
+  }, [taskChatStore]);
+
+  useEffect(() => {
+    if (!activeTaskId) return;
+    const key = String(activeTaskId);
+    if (taskChatHydratedRef.current !== key) return;
+    setTaskChatStore((prev) => ({ ...prev, [String(activeTaskId)]: taskChatMessages }));
+  }, [activeTaskId, taskChatMessages]);
 
   useEffect(() => {
     const timer = setInterval(() => setNowTs(Date.now()), 1000);
@@ -113,6 +137,7 @@ export default function App() {
 
   function closeActiveTaskChat() {
     if (taskAbortRef.current) taskAbortRef.current.abort();
+    taskChatHydratedRef.current = null;
     setActiveSession(null);
     setActiveTaskId(null);
     setActiveTaskTitle('');
@@ -247,6 +272,9 @@ export default function App() {
     if (e?.preventDefault) e.preventDefault();
     const msg = String(directMessage ?? taskChatInput).trim();
     if (!activeSession || !activeTaskId || !msg || taskLoading) return;
+    const history = taskChatMessages
+      .filter((entry) => (entry?.role === 'user' || entry?.role === 'assistant') && String(entry?.text || '').trim())
+      .map((entry) => ({ role: entry.role, text: String(entry.text) }));
     setTaskChatInput('');
     setTaskLoading(true);
     setTaskChatMessages((prev) => [...prev, { role: 'user', text: msg }, { role: 'assistant', text: '' }]);
@@ -258,7 +286,7 @@ export default function App() {
       const res = await fetch(`/api/tasks/${activeTaskId}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg }),
+        body: JSON.stringify({ message: msg, history }),
         signal: controller.signal,
       });
       if (!res.ok) {
@@ -329,14 +357,22 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (!activeSession) return;
+    if (!activeSession || !activeTaskId) return;
+    const key = String(activeTaskId);
     setTaskChatInput('');
     setTaskLoading(false);
     setTaskChatDiag(null);
+    const cached = taskChatStore[key];
+    if (Array.isArray(cached) && cached.length > 0) {
+      taskChatHydratedRef.current = key;
+      setTaskChatMessages(cached);
+      return;
+    }
+    taskChatHydratedRef.current = key;
     setTaskChatMessages([
       { role: 'assistant', text: `Connected to ${activeTaskTitle || activeSession}. You can chat with this task now.` },
     ]);
-  }, [activeSession, activeTaskTitle]);
+  }, [activeSession, activeTaskTitle, activeTaskId]);
 
   useEffect(() => {
     if (!activeSession || !activeTaskId) return;
@@ -480,6 +516,9 @@ export default function App() {
               onInputChange={setTaskChatInput}
               onSubmit={handleTaskChatSubmit}
               onClear={() => {
+                if (activeTaskId) {
+                  setTaskChatStore((prev) => ({ ...prev, [String(activeTaskId)]: [] }));
+                }
                 setTaskChatMessages([]);
                 setTaskChatDiag(null);
               }}
