@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from 'react';
 import { ProjectList } from './components/ProjectList';
 import { TaskBoard } from './components/TaskBoard';
 import { AssistantChatWindow } from './components/AssistantChatWindow';
+import { Terminal } from './components/Terminal';
+import { useSocket } from './hooks/useSocket';
 
 const STORAGE_SELECTED_PROJECT_ID = 'ccm-selected-project-id';
 const STORAGE_ACTIVE_TASK_ID = 'ccm-active-task-id';
@@ -82,6 +84,8 @@ export default function App() {
   const [activeTaskId, setActiveTaskId] = useState(null);
   const [activeTaskTitle, setActiveTaskTitle] = useState('');
 
+  const { socket } = useSocket();
+
   const [chatInput, setChatInput] = useState('');
   const [chatMessages, setChatMessages] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -89,12 +93,6 @@ export default function App() {
   const chatEndRef = useRef(null);
   const chatAbortRef = useRef(null);
 
-  const [taskChatInput, setTaskChatInput] = useState('');
-  const [taskChatMessages, setTaskChatMessages] = useState([]);
-  const [taskLoading, setTaskLoading] = useState(false);
-  const [taskChatDiag, setTaskChatDiag] = useState(null);
-  const taskChatEndRef = useRef(null);
-  const taskAbortRef = useRef(null);
   const [nowTs, setNowTs] = useState(Date.now());
 
   const [theme, setTheme] = useState(() => {
@@ -171,15 +169,10 @@ export default function App() {
   }, [selectedProject, tasks, activeTaskId, tasksLoaded]);
 
   function closeActiveTaskChat() {
-    if (taskAbortRef.current) taskAbortRef.current.abort();
     localStorage.removeItem(STORAGE_ACTIVE_TASK_ID);
     setActiveSession(null);
     setActiveTaskId(null);
     setActiveTaskTitle('');
-    setTaskChatInput('');
-    setTaskLoading(false);
-    setTaskChatDiag(null);
-    setTaskChatMessages([]);
   }
 
   function refreshAll() {
@@ -229,12 +222,6 @@ export default function App() {
     if (!chatAbortRef.current) return;
     chatAbortRef.current.abort();
     setChatDiag((prev) => finalizeDiag(prev || createDiagStart(), 'error', 'Stopped by user'));
-  }
-
-  function stopTaskChat() {
-    if (!taskAbortRef.current) return;
-    taskAbortRef.current.abort();
-    setTaskChatDiag((prev) => finalizeDiag(prev || createDiagStart(), 'error', 'Stopped by user'));
   }
 
   async function handleMainChatSubmit(e, directMessage) {
@@ -326,125 +313,6 @@ export default function App() {
     }
   }
 
-  async function handleTaskChatSubmit(e, directMessage) {
-    if (e?.preventDefault) e.preventDefault();
-    const msg = String(directMessage ?? taskChatInput).trim();
-    if (!activeSession || !activeTaskId || !msg || taskLoading) return;
-    setTaskChatInput('');
-    setTaskLoading(true);
-    setTaskChatMessages((prev) => [...prev, { role: 'user', text: msg }, { role: 'assistant', text: '' }]);
-    setTaskChatDiag(createDiagStart());
-
-    try {
-      const controller = new AbortController();
-      taskAbortRef.current = controller;
-      const res = await fetch(`/api/tasks/${activeTaskId}/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg }),
-        signal: controller.signal,
-      });
-      if (!res.ok) {
-        const errText = await res.text();
-        throw new Error(errText || `HTTP ${res.status}`);
-      }
-      if (!res.body) throw new Error('No response body');
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const chunks = buffer.split('\n\n');
-        buffer = chunks.pop() || '';
-
-        for (const chunk of chunks) {
-          if (!chunk || chunk.startsWith(':')) continue;
-          const dataLines = chunk
-            .split('\n')
-            .filter((line) => line.startsWith('data: '))
-            .map((line) => line.slice(6));
-          if (dataLines.length === 0) continue;
-          try {
-            const event = JSON.parse(dataLines.join('\n'));
-            if (event.ready) continue;
-            if (event.text) {
-              setTaskChatDiag((prev) => updateDiagOnChunk(prev || createDiagStart()));
-              setTaskChatMessages((prev) => {
-                const updated = [...prev];
-                const last = updated[updated.length - 1];
-                if (last?.role === 'assistant') last.text += event.text;
-                return updated;
-              });
-            }
-            if (event.done) {
-              setTaskChatDiag((prev) => finalizeDiag(prev || createDiagStart(), 'done'));
-              refreshAll();
-            }
-          } catch {
-            // ignore malformed chunks
-          }
-        }
-      }
-      refreshAll();
-    } catch (err) {
-      setTaskChatDiag((prev) => finalizeDiag(prev || createDiagStart(), 'error', err?.message || 'request failed'));
-      setTaskChatMessages((prev) => {
-        const updated = [...prev];
-        const last = updated[updated.length - 1];
-        const text = `Error: ${err?.message || 'request failed'}`;
-        if (last?.role === 'assistant') last.text = text;
-        else updated.push({ role: 'assistant', text });
-        return updated;
-      });
-    } finally {
-      taskAbortRef.current = null;
-      setTaskLoading(false);
-      setTaskChatDiag((prev) => {
-        if (!prev) return prev;
-        if (prev.phase === 'done' || prev.phase === 'error') return prev;
-        return finalizeDiag(prev, 'done');
-      });
-    }
-  }
-
-  useEffect(() => {
-    if (!activeSession || !activeTaskId) return;
-    let cancelled = false;
-    setTaskChatInput('');
-    setTaskLoading(false);
-    setTaskChatDiag(null);
-    fetch(`/api/tasks/${activeTaskId}/chat/history`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (cancelled) return;
-        const messages = Array.isArray(data?.messages)
-          ? data.messages
-            .filter((entry) => (entry?.role === 'user' || entry?.role === 'assistant') && String(entry?.text || '').trim())
-            .map((entry) => ({ role: entry.role, text: String(entry.text) }))
-          : [];
-        if (messages.length > 0) {
-          setTaskChatMessages(messages);
-          return;
-        }
-        setTaskChatMessages([
-          { role: 'assistant', text: `Connected to ${activeTaskTitle || activeSession}. You can chat with this task now.` },
-        ]);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setTaskChatMessages([
-          { role: 'assistant', text: `Connected to ${activeTaskTitle || activeSession}. You can chat with this task now.` },
-        ]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeSession, activeTaskTitle, activeTaskId]);
-
   useEffect(() => {
     if (!activeSession || !activeTaskId || !tasksLoaded) return;
     const currentTask = tasks.find((task) => String(task.id) === String(activeTaskId));
@@ -456,7 +324,6 @@ export default function App() {
   useEffect(() => {
     return () => {
       if (chatAbortRef.current) chatAbortRef.current.abort();
-      if (taskAbortRef.current) taskAbortRef.current.abort();
     };
   }, []);
 
@@ -558,7 +425,7 @@ export default function App() {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4" style={{ background: 'rgba(0, 0, 0, 0.58)' }}>
           <div className="w-full h-[100dvh] sm:h-[82vh] sm:max-w-5xl rounded-none sm:rounded-2xl flex flex-col overflow-hidden ccm-panel">
             <div className="flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-3 border-b text-xs" style={{ borderColor: 'var(--border)' }}>
-              <span className="font-semibold shrink-0">Task Session Chat</span>
+              <span className="font-semibold shrink-0">Task Terminal</span>
               <span style={{ color: 'var(--text-3)' }} className="hidden sm:inline">|</span>
               <span className="truncate">{activeTaskTitle}</span>
               <span style={{ color: 'var(--text-3)' }} className="hidden md:inline">({activeSession})</span>
@@ -570,19 +437,9 @@ export default function App() {
               </button>
             </div>
 
-            <AssistantChatWindow
-              title="Sub Claude Chat"
-              endpoint={`/api/tasks/${activeTaskId}/chat`}
-              placeholder="Send message to this sub task..."
-              assistantLabel="Task"
-              messages={taskChatMessages}
-              onMessagesChange={setTaskChatMessages}
-              onClear={() => {
-                if (activeTaskId) fetch(`/api/tasks/${activeTaskId}/chat/history`, { method: 'DELETE' }).catch(() => {});
-              }}
-              onAfterDone={refreshAll}
-              className="border-t-0 flex-1 min-h-0"
-            />
+            <div className="flex-1 min-h-0">
+              <Terminal socket={socket} sessionName={activeSession} />
+            </div>
           </div>
         </div>
       )}

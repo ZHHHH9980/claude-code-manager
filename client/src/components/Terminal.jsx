@@ -15,9 +15,11 @@ export function Terminal({ socket, sessionName }) {
     const isMobile = window.matchMedia?.('(max-width: 767px)').matches ?? false;
     const term = new XTerm({
       theme: { background: termBg, foreground: '#f0e6d7', cursor: '#f0e6d7' },
-      fontSize: isMobile ? 12 : 13,
-      fontFamily: 'IBM Plex Mono, SFMono-Regular, Menlo, monospace',
+      fontSize: isMobile ? 13 : 15,
+      fontFamily: 'Hack Nerd Font, IBM Plex Mono, SFMono-Regular, Menlo, monospace',
       lineHeight: isMobile ? 1.25 : 1.2,
+      scrollback: 5000,
+      cursorBlink: true,
     });
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
