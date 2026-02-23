@@ -5,7 +5,8 @@
     "dev": "node server/index.js",
     "build": "cd client && npm run build",
     "ui:mobile:check": "npm --prefix client run mobile:build-check",
-    "ui:mobile:watch": "node ./scripts/ui-mobile-watch.mjs"
+    "ui:mobile:watch": "node ./scripts/ui-mobile-watch.mjs",
+    "mcp:mobile": "npm --prefix client run mcp:mobile"
   },
   "dependencies": {
     "@notionhq/client": "^2.2.14",

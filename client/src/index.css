@@ -166,3 +166,12 @@ body {
   background: var(--terminal-bg);
   touch-action: pan-x pan-y;
 }
+
+.ccm-x-sender .ant-sender-input,
+.ccm-x-sender textarea {
+  color: var(--text-1) !important;
+}
+
+.ccm-x-sender textarea::placeholder {
+  color: var(--text-3) !important;
+}
