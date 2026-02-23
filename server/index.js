@@ -4,7 +4,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
 const { randomUUID } = require('crypto');
-const { execSync, exec, spawn } = require('child_process');
+const { execSync, exec, spawn, execFileSync } = require('child_process');
 const db = require('./db');
 const { syncTaskToNotion } = require('./notion-sync');
 const ptyManager = require('./pty-manager');
@@ -54,7 +54,8 @@ app.post('/api/tasks', (req, res) => {
 app.post('/api/tasks/:id/start', (req, res) => {
   const { id } = req.params;
   const { worktreePath, branch, model, mode } = req.body;
-  const sessionName = `claude-${branch.replace(/\//g, '-')}`;
+  const safeTaskId = String(id).replace(/[^a-zA-Z0-9_-]/g, '').slice(-24) || 'task';
+  const sessionName = `claude-task-${safeTaskId}`;
 
   const task = db.updateTask(id, {
     status: 'in_progress',
@@ -70,14 +71,17 @@ app.post('/api/tasks/:id/start', (req, res) => {
     console.log('Workflow init skipped or already done');
   }
 
-  ptyManager.createSession(sessionName, worktreePath);
-  setTimeout(() => {
-    if (mode === 'ralph') {
-      ptyManager.sendInput(sessionName, `./ralph.sh --tool claude\n`);
-    } else {
-      ptyManager.sendInput(sessionName, `claude --model ${model || 'claude-sonnet-4-5'}\n`);
-    }
-  }, 500);
+  const existed = ptyManager.sessionExists(sessionName);
+  ptyManager.ensureSession(sessionName, worktreePath);
+  if (!existed) {
+    setTimeout(() => {
+      if (mode === 'ralph') {
+        ptyManager.sendInput(sessionName, './ralph.sh --tool claude\n');
+      } else {
+        ptyManager.sendInput(sessionName, `claude --model ${model || 'claude-sonnet-4-5'}\n`);
+      }
+    }, 500);
+  }
 
   watchProgress(worktreePath, id);
   res.json({ sessionName, tmuxCmd: ptyManager.getTmuxAttachCmd(sessionName) });
@@ -110,6 +114,43 @@ app.delete('/api/tasks/:id/chat/history', (req, res) => {
 
 function logChatMetric(event, payload) {
   console.log(`[chat-metric] ${JSON.stringify({ event, ...payload })}`);
+}
+
+function captureTmuxPane(sessionName, lines = 240) {
+  try {
+    const out = execFileSync('tmux', ['capture-pane', '-p', '-t', sessionName, '-S', `-${lines}`], {
+      encoding: 'utf8',
+      maxBuffer: 1024 * 1024,
+    });
+    return String(out || '');
+  } catch {
+    return '';
+  }
+}
+
+function ensureTaskProcess(task) {
+  if (!task) return null;
+  const safeTaskId = String(task.id || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(-24) || 'task';
+  const sessionName = task.tmux_session || `claude-task-${safeTaskId}`;
+  let cwd = task.worktree_path;
+  if (!cwd && task.project_id) {
+    cwd = db.getProject(task.project_id)?.repo_path;
+  }
+  if (!cwd) return null;
+  const existed = ptyManager.sessionExists(sessionName);
+  ptyManager.ensureSession(sessionName, cwd);
+  if (!existed) {
+    setTimeout(() => {
+      if (task.mode === 'ralph') ptyManager.sendInput(sessionName, './ralph.sh --tool claude\n');
+      else ptyManager.sendInput(sessionName, `claude --model ${task.model || 'claude-sonnet-4-5'}\n`);
+    }, 500);
+  }
+  if (task.tmux_session !== sessionName || task.status !== 'in_progress') {
+    const updated = db.updateTask(task.id, { tmuxSession: sessionName, status: 'in_progress' });
+    syncTaskToNotion(updated);
+  }
+  if (task.worktree_path) watchProgress(task.worktree_path, task.id);
+  return { sessionName, cwd };
 }
 
 function isoNow(ts = Date.now()) {
@@ -346,7 +387,6 @@ app.post('/api/agent', (req, res) => {
   );
 });
 
-const activeTaskAgents = new Map();
 app.post('/api/tasks/:id/chat', (req, res) => {
   const { id } = req.params;
   const { message } = req.body;
@@ -354,15 +394,12 @@ app.post('/api/tasks/:id/chat', (req, res) => {
 
   const task = db.getTask(id);
   if (!task) return res.status(404).json({ error: 'task not found' });
+  const runtime = ensureTaskProcess(task);
+  if (!runtime) return res.status(400).json({ error: 'task worktree/repo path missing' });
 
-  let cwd = task.worktree_path;
-  if (!cwd && task.project_id) {
-    cwd = db.getProject(task.project_id)?.repo_path;
-  }
-  if (!cwd) return res.status(400).json({ error: 'task worktree/repo path missing' });
   const project = task.project_id ? db.getProject(task.project_id) : null;
   if (isTaskStatusQuery(message)) {
-    const quickReply = buildTaskStatusReply(task, project, activeTaskAgents.has(id));
+    const quickReply = buildTaskStatusReply(task, project, ptyManager.sessionExists(runtime.sessionName));
     db.appendTaskChatMessage(id, 'user', message);
     db.appendTaskChatMessage(id, 'assistant', quickReply);
     res.setHeader('Content-Type', 'text/event-stream');
@@ -378,46 +415,69 @@ app.post('/api/tasks/:id/chat', (req, res) => {
   const history = db.getTaskChatMessages(id, 24).map((entry) => ({ role: entry.role, text: entry.text }));
   db.appendTaskChatMessage(id, 'user', message);
   const scopedMessage = buildTaskScopedPrompt(task, project, message, history);
+  const sessionName = runtime.sessionName;
+  const baseline = captureTmuxPane(sessionName, 300);
+  let streamed = '';
+  let lastChangeAt = Date.now();
+  const startedAt = Date.now();
+  const idleMs = 1500;
+  const hardTimeoutMs = 300000;
 
-  const prev = activeTaskAgents.get(id);
-  if (prev) {
-    try { prev.kill('SIGTERM'); } catch {}
-    activeTaskAgents.delete(id);
-  }
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  if (typeof res.flushHeaders === 'function') res.flushHeaders();
+  res.write(`data: ${JSON.stringify({ ready: true })}\n\n`);
 
-  let assistantOutput = '';
-  startClaudeStream(
-    {
-      cwd,
-      message: scopedMessage,
-      scope: 'task_chat',
-      taskId: id,
-      onProcess: (child) => {
-        activeTaskAgents.set(id, child);
-        child.stdout.on('data', (chunk) => {
-          assistantOutput += chunk.toString();
-        });
-        child.stderr.on('data', (chunk) => {
-          assistantOutput += chunk.toString();
-        });
-        child.on('close', () => {
-          db.appendTaskChatMessage(id, 'assistant', assistantOutput);
-          if (activeTaskAgents.get(id) === child) activeTaskAgents.delete(id);
-        });
-      },
-    },
-    res
-  );
+  ptyManager.sendInput(sessionName, `${scopedMessage}\n`);
+
+  const heartbeat = setInterval(() => {
+    if (!res.writableEnded) res.write(': ping\n\n');
+  }, 15000);
+
+  const poll = setInterval(() => {
+    const current = captureTmuxPane(sessionName, 300);
+    if (!current) return;
+    let appended;
+    if (current.startsWith(baseline)) appended = current.slice(baseline.length);
+    else {
+      let i = 0;
+      const max = Math.min(current.length, baseline.length);
+      while (i < max && current[i] === baseline[i]) i += 1;
+      appended = current.slice(i);
+    }
+    if (appended.length > streamed.length) {
+      const delta = appended.slice(streamed.length);
+      streamed = appended;
+      lastChangeAt = Date.now();
+      if (!res.writableEnded) res.write(`data: ${JSON.stringify({ text: delta })}\n\n`);
+    }
+    const now = Date.now();
+    const reachedIdle = streamed.length > 0 && now - lastChangeAt > idleMs;
+    const reachedTimeout = now - startedAt > hardTimeoutMs;
+    if (reachedIdle || reachedTimeout) {
+      clearInterval(poll);
+      clearInterval(heartbeat);
+      const finalText = streamed.trim();
+      if (finalText) db.appendTaskChatMessage(id, 'assistant', finalText);
+      if (!res.writableEnded) {
+        res.write(`data: ${JSON.stringify({ done: true, code: 0, signal: null, source: 'tmux' })}\n\n`);
+        res.end();
+      }
+    }
+  }, 350);
+
+  res.on('close', () => {
+    clearInterval(poll);
+    clearInterval(heartbeat);
+    const finalText = streamed.trim();
+    if (finalText) db.appendTaskChatMessage(id, 'assistant', finalText);
+  });
 });
 
 // For terminal/tmux chat stream, keep backward compatibility path.
 app.post('/api/tasks/:id/stop-chat', (req, res) => {
-  const { id } = req.params;
-  const proc = activeTaskAgents.get(id);
-  if (proc) {
-    try { proc.kill('SIGTERM'); } catch {}
-    activeTaskAgents.delete(id);
-  }
+  // Task chat now runs on persistent tmux sessions; stop-chat no longer kills task runtime.
   res.json({ ok: true });
 });
 

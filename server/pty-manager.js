@@ -20,6 +20,17 @@ function createSession(sessionName, cwd) {
   return attachSession(sessionName);
 }
 
+function sessionExists(sessionName) {
+  return tmuxSessionExists(sessionName);
+}
+
+function ensureSession(sessionName, cwd) {
+  if (tmuxSessionExists(sessionName)) {
+    return attachSession(sessionName);
+  }
+  return createSession(sessionName, cwd);
+}
+
 function attachSession(sessionName) {
   if (sessions.has(sessionName)) {
     return sessions.get(sessionName);
@@ -62,4 +73,14 @@ function listAliveSessions() {
   }
 }
 
-module.exports = { createSession, attachSession, sendInput, killSession, getTmuxAttachCmd, listAliveSessions, sessions };
+module.exports = {
+  createSession,
+  attachSession,
+  ensureSession,
+  sessionExists,
+  sendInput,
+  killSession,
+  getTmuxAttachCmd,
+  listAliveSessions,
+  sessions,
+};
