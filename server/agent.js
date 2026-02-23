@@ -74,7 +74,7 @@ function executeTool(name, input) {
 
 const SYSTEM = `You are the CCM (Claude Code Manager) assistant. Help users manage projects and tasks.
 Use tools to accomplish requests. List projects first if you need a project ID.
-Be concise. Respond in the user's language.`;
+Be concise. Respond in the user's language. When creating tasks, generate a reasonable branch name if not specified.`;
 
 async function chat(messages) {
   let startAction = null;
