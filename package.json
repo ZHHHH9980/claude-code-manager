@@ -4,9 +4,12 @@
   "scripts": {
     "dev": "node server/index.js",
     "build": "cd client && npm run build",
+    "hooks:install": "git config core.hooksPath .githooks && chmod +x .githooks/post-commit",
+    "hooks:uninstall": "git config --unset core.hooksPath || true",
     "ui:mobile:check": "npm --prefix client run mobile:build-check",
     "ui:mobile:watch": "node ./scripts/ui-mobile-watch.mjs",
-    "mcp:mobile": "npm --prefix client run mcp:mobile"
+    "mcp:mobile": "npm --prefix client run mcp:mobile",
+    "mcp:task-persistence": "npm --prefix client run mcp:task-persistence"
   },
   "dependencies": {
     "@notionhq/client": "^2.2.14",

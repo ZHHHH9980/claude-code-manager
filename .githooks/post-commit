@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DEPLOY_URL="${CCM_DEPLOY_URL:-http://127.0.0.1:3000/api/deploy}"
+DEPLOY_TOKEN="${CCM_DEPLOY_TOKEN:-}"
+TIMEOUT_SEC="${CCM_DEPLOY_TIMEOUT_SEC:-15}"
+
+if ! command -v curl >/dev/null 2>&1; then
+  echo "[post-commit] curl not found, skip deploy trigger."
+  exit 0
+fi
+
+headers=(-H "Content-Type: application/json")
+if [[ -n "$DEPLOY_TOKEN" ]]; then
+  headers+=(-H "Authorization: Bearer ${DEPLOY_TOKEN}")
+fi
+
+if curl -fsS -m "$TIMEOUT_SEC" -X POST "${headers[@]}" "$DEPLOY_URL" -d '{}' >/dev/null; then
+  echo "[post-commit] deploy triggered: $DEPLOY_URL"
+else
+  echo "[post-commit] deploy trigger failed (non-blocking): $DEPLOY_URL"
+fi

@@ -108,6 +108,7 @@ app.delete('/api/tasks/:id', (req, res) => {
   const { id } = req.params;
   const task = db.getTask(id);
   if (task?.tmux_session) ptyManager.killSession(task.tmux_session);
+  if (task?.worktree_path) unwatchProgress(task.worktree_path);
   const ok = db.deleteTask(id);
   if (!ok) return res.status(404).json({ error: 'task not found' });
   res.json({ ok: true, deleted: id });

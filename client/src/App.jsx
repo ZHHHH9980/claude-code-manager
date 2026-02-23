@@ -3,6 +3,9 @@ import { ProjectList } from './components/ProjectList';
 import { TaskBoard } from './components/TaskBoard';
 import { AssistantChatWindow } from './components/AssistantChatWindow';
 
+const STORAGE_SELECTED_PROJECT_ID = 'ccm-selected-project-id';
+const STORAGE_ACTIVE_TASK_ID = 'ccm-active-task-id';
+
 function createDiagStart() {
   return {
     phase: 'sending',
@@ -73,6 +76,7 @@ function buildStatusText(diag) {
 export default function App() {
   const [projects, setProjects] = useState([]);
   const [tasks, setTasks] = useState([]);
+  const [tasksLoaded, setTasksLoaded] = useState(false);
   const [selectedProject, setSelectedProject] = useState(null);
   const [activeSession, setActiveSession] = useState(null);
   const [activeTaskId, setActiveTaskId] = useState(null);
@@ -116,7 +120,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const savedId = localStorage.getItem('ccm-selected-project-id');
+    const savedId = localStorage.getItem(STORAGE_SELECTED_PROJECT_ID);
     if (!savedId || projects.length === 0) return;
     if (selectedProject?.id === savedId) return;
     const project = projects.find((p) => String(p.id) === String(savedId));
@@ -124,13 +128,47 @@ export default function App() {
   }, [projects, selectedProject]);
 
   useEffect(() => {
-    if (!selectedProject) return;
-    localStorage.setItem('ccm-selected-project-id', String(selectedProject.id));
-    fetch(`/api/tasks?projectId=${selectedProject.id}`).then((r) => r.json()).then(setTasks);
+    if (!selectedProject) {
+      setTasks([]);
+      setTasksLoaded(false);
+      return;
+    }
+    setTasksLoaded(false);
+    localStorage.setItem(STORAGE_SELECTED_PROJECT_ID, String(selectedProject.id));
+    fetch(`/api/tasks?projectId=${selectedProject.id}`)
+      .then((r) => r.json())
+      .then((rows) => {
+        setTasks(Array.isArray(rows) ? rows : []);
+        setTasksLoaded(true);
+      })
+      .catch(() => {
+        setTasks([]);
+        setTasksLoaded(true);
+      });
   }, [selectedProject]);
+
+  useEffect(() => {
+    if (!activeTaskId) {
+      localStorage.removeItem(STORAGE_ACTIVE_TASK_ID);
+      return;
+    }
+    localStorage.setItem(STORAGE_ACTIVE_TASK_ID, String(activeTaskId));
+  }, [activeTaskId]);
+
+  useEffect(() => {
+    if (!selectedProject || activeTaskId || !tasksLoaded) return;
+    const savedTaskId = localStorage.getItem(STORAGE_ACTIVE_TASK_ID);
+    if (!savedTaskId) return;
+    const savedTask = tasks.find((task) => String(task.id) === String(savedTaskId));
+    if (!savedTask || !savedTask.tmux_session) return;
+    setActiveSession(savedTask.tmux_session);
+    setActiveTaskId(savedTask.id);
+    setActiveTaskTitle(savedTask.title || savedTask.tmux_session);
+  }, [selectedProject, tasks, activeTaskId, tasksLoaded]);
 
   function closeActiveTaskChat() {
     if (taskAbortRef.current) taskAbortRef.current.abort();
+    localStorage.removeItem(STORAGE_ACTIVE_TASK_ID);
     setActiveSession(null);
     setActiveTaskId(null);
     setActiveTaskTitle('');
@@ -159,6 +197,7 @@ export default function App() {
       }),
     });
     const { sessionName } = await res.json();
+    localStorage.setItem(STORAGE_ACTIVE_TASK_ID, String(task.id));
     setActiveSession(sessionName);
     setActiveTaskId(task.id);
     setActiveTaskTitle(task.title || sessionName);
@@ -167,6 +206,7 @@ export default function App() {
 
   function handleOpenTask(task) {
     if (!task?.tmux_session) return;
+    localStorage.setItem(STORAGE_ACTIVE_TASK_ID, String(task.id));
     setActiveSession(task.tmux_session);
     setActiveTaskId(task.id);
     setActiveTaskTitle(task.title || task.tmux_session);
@@ -402,12 +442,12 @@ export default function App() {
   }, [activeSession, activeTaskTitle, activeTaskId]);
 
   useEffect(() => {
-    if (!activeSession || !activeTaskId) return;
+    if (!activeSession || !activeTaskId || !tasksLoaded) return;
     const currentTask = tasks.find((task) => String(task.id) === String(activeTaskId));
     if (!currentTask || currentTask.status === 'done' || currentTask.status === 'interrupted') {
       closeActiveTaskChat();
     }
-  }, [tasks, activeSession, activeTaskId]);
+  }, [tasks, activeSession, activeTaskId, tasksLoaded]);
 
   useEffect(() => {
     return () => {
