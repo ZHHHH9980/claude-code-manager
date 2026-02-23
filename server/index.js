@@ -8,7 +8,6 @@ const db = require('./db');
 const { syncTaskToNotion } = require('./notion-sync');
 const ptyManager = require('./pty-manager');
 const { watchProgress, unwatchProgress } = require('./file-watcher');
-const agent = require('./agent');
 
 const WORKFLOW_DIR = process.env.WORKFLOW_DIR || path.join(process.env.HOME, 'Documents/claude-workflow');
 
@@ -93,16 +92,22 @@ app.post('/api/tasks/:id/stop', (req, res) => {
   res.json({ ok: true });
 });
 
-// Agent chat
-app.post('/api/chat', async (req, res) => {
-  try {
-    const { messages } = req.body;
-    const result = await agent.chat(messages);
-    res.json(result);
-  } catch (e) {
-    console.error('Agent error:', e.message);
-    res.status(500).json({ error: e.message });
-  }
+// Agent chat - powered by Claude Code
+app.post('/api/agent', (req, res) => {
+  const { message } = req.body;
+  if (!message) return res.status(400).json({ error: 'message required' });
+
+  const cwd = path.join(__dirname, '..');
+  const escaped = message.replace(/'/g, "'\\''");
+  const cmd = `claude --print '${escaped}'`;
+
+  exec(cmd, { cwd, timeout: 120000, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+    if (err) {
+      console.error('Agent error:', err.message);
+      return res.json({ text: stderr || err.message, error: true });
+    }
+    res.json({ text: stdout });
+  });
 });
 
 // Self-deploy: git pull + build + restart

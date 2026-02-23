@@ -3,7 +3,6 @@ import { ProjectList } from './components/ProjectList';
 import { TaskBoard } from './components/TaskBoard';
 import { Terminal } from './components/Terminal';
 import { useSocket } from './hooks/useSocket';
-import { chat as agentChat } from './agent';
 
 export default function App() {
   const { socket } = useSocket();
@@ -14,9 +13,7 @@ export default function App() {
   const [activeTmuxCmd, setActiveTmuxCmd] = useState('');
   const [chatInput, setChatInput] = useState('');
   const [chatMessages, setChatMessages] = useState([]);
-  const [agentMessages, setAgentMessages] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [apiKey, setApiKey] = useState(() => localStorage.getItem('poe_api_key') || '');
   const chatEndRef = useRef(null);
 
   useEffect(() => {
@@ -58,32 +55,22 @@ export default function App() {
     refreshAll();
   }
 
-  function saveApiKey(key) {
-    setApiKey(key);
-    localStorage.setItem('poe_api_key', key);
-  }
-
   async function handleChat(e) {
     e.preventDefault();
     if (!chatInput.trim() || loading) return;
-    if (!apiKey) {
-      setChatMessages(prev => [...prev, { role: 'assistant', text: 'Please set your Poe API key first (click the key icon).' }]);
-      return;
-    }
     const userMsg = chatInput.trim();
     setChatInput('');
     setChatMessages(prev => [...prev, { role: 'user', text: userMsg }]);
     setLoading(true);
 
     try {
-      const msgs = [...agentMessages, { role: 'user', content: userMsg }];
-      const data = await agentChat(msgs, apiKey);
+      const res = await fetch('/api/agent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: userMsg }),
+      });
+      const data = await res.json();
       setChatMessages(prev => [...prev, { role: 'assistant', text: data.text }]);
-      setAgentMessages(data.messages);
-      if (data.startAction) {
-        const task = tasks.find(t => t.id === data.startAction.taskId);
-        if (task) handleStartTask(task, data.startAction.mode);
-      }
       refreshAll();
     } catch (err) {
       setChatMessages(prev => [...prev, { role: 'assistant', text: `Error: ${err.message}` }]);
@@ -95,18 +82,7 @@ export default function App() {
     <div className="flex flex-col h-screen bg-gray-900 text-white font-mono">
       <div className="flex items-center justify-between px-4 py-2 border-b border-gray-700">
         <span className="font-bold text-blue-400">Claude Code Manager</span>
-        <div className="flex items-center gap-2">
-          {!apiKey ? (
-            <input
-              placeholder="Poe API Key"
-              onKeyDown={e => e.key === 'Enter' && saveApiKey(e.target.value)}
-              onBlur={e => e.target.value && saveApiKey(e.target.value)}
-              className="text-xs bg-gray-800 px-2 py-1 rounded w-48"
-            />
-          ) : (
-            <button onClick={() => saveApiKey('')} className="text-xs text-gray-500 hover:text-white">Key: ...{apiKey.slice(-6)}</button>
-          )}
-        </div>
+        <span className="text-xs text-gray-500">Agent: Claude Code</span>
       </div>
 
       <div className="flex flex-1 overflow-hidden">
