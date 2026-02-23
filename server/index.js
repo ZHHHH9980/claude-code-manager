@@ -99,10 +99,10 @@ app.post('/api/agent', (req, res) => {
 
   const cwd = path.join(__dirname, '..');
   const escaped = message.replace(/'/g, "'\\''");
-  const cmd = `claude --print '${escaped}' < /dev/null`;
+  const cmd = `claude --print --allowedTools Bash Read Edit Write Glob Grep '${escaped}'`;
 
-  const env = { ...process.env };
-  // Ensure Anthropic env vars are set (may not be in pm2 context)
+  const nvmNode = path.join(process.env.HOME || '/root', '.nvm/versions/node/v22.22.0/bin');
+  const env = { ...process.env, PATH: `${nvmNode}:${process.env.PATH}` };
   if (!env.ANTHROPIC_BASE_URL) env.ANTHROPIC_BASE_URL = 'https://crs.itssx.com/api';
 
   exec(cmd, { cwd, timeout: 120000, maxBuffer: 1024 * 1024, env }, (err, stdout, stderr) => {
