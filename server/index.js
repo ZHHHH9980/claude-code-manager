@@ -136,9 +136,9 @@ function ensureTaskProcess(task) {
   if (!cwd && task.project_id) {
     cwd = db.getProject(task.project_id)?.repo_path;
   }
-  if (!cwd) return null;
   const existed = ptyManager.sessionExists(sessionName);
-  ptyManager.ensureSession(sessionName, cwd);
+  if (!existed && !cwd) return null;
+  ptyManager.ensureSession(sessionName, cwd || process.env.HOME || '/');
   if (!existed) {
     setTimeout(() => {
       if (task.mode === 'ralph') ptyManager.sendInput(sessionName, './ralph.sh --tool claude\n');
@@ -149,7 +149,7 @@ function ensureTaskProcess(task) {
     const updated = db.updateTask(task.id, { tmuxSession: sessionName, status: 'in_progress' });
     syncTaskToNotion(updated);
   }
-  if (task.worktree_path) watchProgress(task.worktree_path, task.id);
+  if (cwd) watchProgress(cwd, task.id);
   return { sessionName, cwd };
 }
 
@@ -388,91 +388,100 @@ app.post('/api/agent', (req, res) => {
 });
 
 app.post('/api/tasks/:id/chat', (req, res) => {
-  const { id } = req.params;
-  const { message } = req.body;
-  if (!message) return res.status(400).json({ error: 'message required' });
+  try {
+    const { id } = req.params;
+    const { message } = req.body;
+    if (!message) return res.status(400).json({ error: 'message required' });
 
-  const task = db.getTask(id);
-  if (!task) return res.status(404).json({ error: 'task not found' });
-  const runtime = ensureTaskProcess(task);
-  if (!runtime) return res.status(400).json({ error: 'task worktree/repo path missing' });
+    const task = db.getTask(id);
+    if (!task) return res.status(404).json({ error: 'task not found' });
+    const runtime = ensureTaskProcess(task);
+    if (!runtime) return res.status(400).json({ error: 'task worktree/repo path missing' });
 
-  const project = task.project_id ? db.getProject(task.project_id) : null;
-  if (isTaskStatusQuery(message)) {
-    const quickReply = buildTaskStatusReply(task, project, ptyManager.sessionExists(runtime.sessionName));
+    const project = task.project_id ? db.getProject(task.project_id) : null;
+    if (isTaskStatusQuery(message)) {
+      const quickReply = buildTaskStatusReply(task, project, ptyManager.sessionExists(runtime.sessionName));
+      db.appendTaskChatMessage(id, 'user', message);
+      db.appendTaskChatMessage(id, 'assistant', quickReply);
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache, no-transform');
+      res.setHeader('Connection', 'keep-alive');
+      if (typeof res.flushHeaders === 'function') res.flushHeaders();
+      res.write(`data: ${JSON.stringify({ ready: true })}\n\n`);
+      res.write(`data: ${JSON.stringify({ text: quickReply })}\n\n`);
+      res.write(`data: ${JSON.stringify({ done: true, code: 0, signal: null, shortcut: 'task_status' })}\n\n`);
+      res.end();
+      return;
+    }
+
     db.appendTaskChatMessage(id, 'user', message);
-    db.appendTaskChatMessage(id, 'assistant', quickReply);
+    const sessionName = runtime.sessionName;
+    const baseline = captureTmuxPane(sessionName, 300);
+    let streamed = '';
+    let lastChangeAt = Date.now();
+    const startedAt = Date.now();
+    const idleMs = 1800;
+    const noOutputMs = 45000;
+    const hardTimeoutMs = 300000;
+
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
     if (typeof res.flushHeaders === 'function') res.flushHeaders();
     res.write(`data: ${JSON.stringify({ ready: true })}\n\n`);
-    res.write(`data: ${JSON.stringify({ text: quickReply })}\n\n`);
-    res.write(`data: ${JSON.stringify({ done: true, code: 0, signal: null, shortcut: 'task_status' })}\n\n`);
-    res.end();
-    return;
-  }
-  const history = db.getTaskChatMessages(id, 24).map((entry) => ({ role: entry.role, text: entry.text }));
-  db.appendTaskChatMessage(id, 'user', message);
-  const scopedMessage = buildTaskScopedPrompt(task, project, message, history);
-  const sessionName = runtime.sessionName;
-  const baseline = captureTmuxPane(sessionName, 300);
-  let streamed = '';
-  let lastChangeAt = Date.now();
-  const startedAt = Date.now();
-  const idleMs = 1500;
-  const hardTimeoutMs = 300000;
 
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache, no-transform');
-  res.setHeader('Connection', 'keep-alive');
-  if (typeof res.flushHeaders === 'function') res.flushHeaders();
-  res.write(`data: ${JSON.stringify({ ready: true })}\n\n`);
+    ptyManager.sendInput(sessionName, `${String(message).trim()}\n`);
 
-  ptyManager.sendInput(sessionName, `${scopedMessage}\n`);
+    const heartbeat = setInterval(() => {
+      if (!res.writableEnded) res.write(': ping\n\n');
+    }, 15000);
 
-  const heartbeat = setInterval(() => {
-    if (!res.writableEnded) res.write(': ping\n\n');
-  }, 15000);
+    const poll = setInterval(() => {
+      const current = captureTmuxPane(sessionName, 300);
+      if (!current) return;
+      let appended;
+      if (current.startsWith(baseline)) appended = current.slice(baseline.length);
+      else {
+        let i = 0;
+        const max = Math.min(current.length, baseline.length);
+        while (i < max && current[i] === baseline[i]) i += 1;
+        appended = current.slice(i);
+      }
+      if (appended.length > streamed.length) {
+        const delta = appended.slice(streamed.length);
+        streamed = appended;
+        lastChangeAt = Date.now();
+        if (!res.writableEnded) res.write(`data: ${JSON.stringify({ text: delta })}\n\n`);
+      }
+      const now = Date.now();
+      const reachedIdle = streamed.length > 0 && now - lastChangeAt > idleMs;
+      const reachedNoOutput = streamed.length === 0 && now - startedAt > noOutputMs;
+      const reachedTimeout = now - startedAt > hardTimeoutMs;
+      if (reachedIdle || reachedNoOutput || reachedTimeout) {
+        clearInterval(poll);
+        clearInterval(heartbeat);
+        const finalText = streamed.trim();
+        if (finalText) db.appendTaskChatMessage(id, 'assistant', finalText);
+        if (reachedNoOutput && !finalText && !res.writableEnded) {
+          res.write(`data: ${JSON.stringify({ text: '[No visible output from task session within 45s]' })}\n\n`);
+        }
+        if (!res.writableEnded) {
+          res.write(`data: ${JSON.stringify({ done: true, code: 0, signal: null, source: 'tmux' })}\n\n`);
+          res.end();
+        }
+      }
+    }, 350);
 
-  const poll = setInterval(() => {
-    const current = captureTmuxPane(sessionName, 300);
-    if (!current) return;
-    let appended;
-    if (current.startsWith(baseline)) appended = current.slice(baseline.length);
-    else {
-      let i = 0;
-      const max = Math.min(current.length, baseline.length);
-      while (i < max && current[i] === baseline[i]) i += 1;
-      appended = current.slice(i);
-    }
-    if (appended.length > streamed.length) {
-      const delta = appended.slice(streamed.length);
-      streamed = appended;
-      lastChangeAt = Date.now();
-      if (!res.writableEnded) res.write(`data: ${JSON.stringify({ text: delta })}\n\n`);
-    }
-    const now = Date.now();
-    const reachedIdle = streamed.length > 0 && now - lastChangeAt > idleMs;
-    const reachedTimeout = now - startedAt > hardTimeoutMs;
-    if (reachedIdle || reachedTimeout) {
+    res.on('close', () => {
       clearInterval(poll);
       clearInterval(heartbeat);
       const finalText = streamed.trim();
       if (finalText) db.appendTaskChatMessage(id, 'assistant', finalText);
-      if (!res.writableEnded) {
-        res.write(`data: ${JSON.stringify({ done: true, code: 0, signal: null, source: 'tmux' })}\n\n`);
-        res.end();
-      }
-    }
-  }, 350);
-
-  res.on('close', () => {
-    clearInterval(poll);
-    clearInterval(heartbeat);
-    const finalText = streamed.trim();
-    if (finalText) db.appendTaskChatMessage(id, 'assistant', finalText);
-  });
+    });
+  } catch (err) {
+    if (res.writableEnded) return;
+    res.status(500).json({ error: err?.message || 'task chat failed' });
+  }
 });
 
 // For terminal/tmux chat stream, keep backward compatibility path.
