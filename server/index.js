@@ -8,6 +8,7 @@ const { execSync, exec, spawn } = require('child_process');
 const db = require('./db');
 const { syncTaskToNotion } = require('./notion-sync');
 const ptyManager = require('./pty-manager');
+const { TaskChatRuntimeManager } = require('./task-chat-runtime');
 const { watchProgress, unwatchProgress } = require('./file-watcher');
 
 const WORKFLOW_DIR = process.env.WORKFLOW_DIR || path.join(process.env.HOME, 'Documents/claude-workflow');
@@ -15,19 +16,9 @@ const WORKFLOW_DIR = process.env.WORKFLOW_DIR || path.join(process.env.HOME, 'Do
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
-const activeTaskAgents = new Map();
-const taskChatLocks = new Map();
-
-function runTaskChatLocked(taskId, runner) {
-  const prev = taskChatLocks.get(taskId) || Promise.resolve();
-  const next = prev
-    .catch(() => {})
-    .then(() => runner());
-  taskChatLocks.set(taskId, next);
-  return next.finally(() => {
-    if (taskChatLocks.get(taskId) === next) taskChatLocks.delete(taskId);
-  });
-}
+const taskChatRuntimeManager = new TaskChatRuntimeManager({
+  logMetric: (event, payload) => logChatMetric(event, payload),
+});
 
 app.use(express.json());
 
@@ -92,25 +83,36 @@ app.post('/api/tasks/:id/start', (req, res) => {
     console.log('Workflow init skipped or already done');
   }
 
-  const existed = ptyManager.sessionExists(sessionName);
-  ptyManager.ensureSession(sessionName, worktreePath);
-  if (!existed) {
-    setTimeout(() => {
-      if (mode === 'ralph') {
-        ptyManager.sendInput(sessionName, './ralph.sh --tool claude\n');
-      } else {
-        ptyManager.sendInput(sessionName, `claude --model ${model || 'claude-sonnet-4-5'}\n`);
-      }
-    }, 500);
+  let tmuxAvailable = true;
+  try {
+    const existed = ptyManager.sessionExists(sessionName);
+    ptyManager.ensureSession(sessionName, worktreePath);
+    if (!existed) {
+      setTimeout(() => {
+        try {
+          if (mode === 'ralph') {
+            ptyManager.sendInput(sessionName, './ralph.sh --tool claude\n');
+          } else {
+            ptyManager.sendInput(sessionName, `claude --model ${model || 'claude-sonnet-4-5'}\n`);
+          }
+        } catch (err) {
+          console.warn(`tmux sendInput failed for task ${id}:`, err?.message || err);
+        }
+      }, 500);
+    }
+  } catch (err) {
+    tmuxAvailable = false;
+    console.warn(`tmux unavailable for task ${id}:`, err?.message || err);
   }
 
   watchProgress(worktreePath, id);
-  res.json({ sessionName, tmuxCmd: ptyManager.getTmuxAttachCmd(sessionName) });
+  res.json({ sessionName, tmuxCmd: ptyManager.getTmuxAttachCmd(sessionName), tmuxAvailable });
 });
 
 app.post('/api/tasks/:id/stop', (req, res) => {
   const { id } = req.params;
   const task = db.getTask(id);
+  taskChatRuntimeManager.stopTask(id, 'task_stop');
   if (task?.tmux_session) ptyManager.killSession(task.tmux_session);
   if (task?.worktree_path) unwatchProgress(task.worktree_path);
   const updated = db.updateTask(id, { status: 'done' });
@@ -120,6 +122,10 @@ app.post('/api/tasks/:id/stop', (req, res) => {
 
 app.delete('/api/projects/:id', (req, res) => {
   const { id } = req.params;
+  const projectTasks = db.getTasks(id);
+  for (const t of projectTasks) {
+    taskChatRuntimeManager.stopTask(t.id, 'project_delete');
+  }
   const ok = db.deleteProject(id);
   if (!ok) return res.status(404).json({ error: 'project not found' });
   res.json({ ok: true, deleted: id });
@@ -128,6 +134,7 @@ app.delete('/api/projects/:id', (req, res) => {
 app.delete('/api/tasks/:id', (req, res) => {
   const { id } = req.params;
   const task = db.getTask(id);
+  taskChatRuntimeManager.stopTask(id, 'task_delete');
   if (task?.tmux_session) ptyManager.killSession(task.tmux_session);
   if (task?.worktree_path) unwatchProgress(task.worktree_path);
   const ok = db.deleteTask(id);
@@ -146,11 +153,7 @@ app.delete('/api/tasks/:id/chat/history', (req, res) => {
   const { id } = req.params;
   const task = db.getTask(id);
   if (!task) return res.status(404).json({ error: 'task not found' });
-  const inFlight = activeTaskAgents.get(id);
-  if (inFlight) {
-    try { inFlight.kill('SIGTERM'); } catch {}
-    activeTaskAgents.delete(id);
-  }
+  taskChatRuntimeManager.stopTask(id, 'clear_history');
   db.clearTaskChatMessages(id);
   db.updateTask(id, { chatSessionId: null });
   res.json({ ok: true });
@@ -160,7 +163,8 @@ function logChatMetric(event, payload) {
   console.log(`[chat-metric] ${JSON.stringify({ event, ...payload })}`);
 }
 
-function ensureTaskProcess(task) {
+function ensureTaskProcess(task, opts = {}) {
+  const { ensureTmux = true } = opts;
   if (!task) return null;
   const safeTaskId = String(task.id || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(-24) || 'task';
   const sessionName = task.tmux_session || `claude-task-${safeTaskId}`;
@@ -168,14 +172,25 @@ function ensureTaskProcess(task) {
   if (!cwd && task.project_id) {
     cwd = db.getProject(task.project_id)?.repo_path;
   }
-  const existed = ptyManager.sessionExists(sessionName);
-  if (!existed && !cwd) return null;
-  ptyManager.ensureSession(sessionName, cwd || process.env.HOME || '/');
-  if (!existed) {
-    setTimeout(() => {
-      if (task.mode === 'ralph') ptyManager.sendInput(sessionName, './ralph.sh --tool claude\n');
-      else ptyManager.sendInput(sessionName, `claude --model ${task.model || 'claude-sonnet-4-5'}\n`);
-    }, 500);
+  if (!cwd) return null;
+
+  if (ensureTmux) {
+    const existed = ptyManager.sessionExists(sessionName);
+    try {
+      ptyManager.ensureSession(sessionName, cwd || process.env.HOME || '/');
+      if (!existed) {
+        setTimeout(() => {
+          try {
+            if (task.mode === 'ralph') ptyManager.sendInput(sessionName, './ralph.sh --tool claude\n');
+            else ptyManager.sendInput(sessionName, `claude --model ${task.model || 'claude-sonnet-4-5'}\n`);
+          } catch (err) {
+            console.warn(`tmux sendInput failed for task ${task.id}:`, err?.message || err);
+          }
+        }, 500);
+      }
+    } catch (err) {
+      console.warn(`tmux ensureSession failed for task ${task.id}:`, err?.message || err);
+    }
   }
   if (task.tmux_session !== sessionName || task.status !== 'in_progress') {
     const updated = db.updateTask(task.id, { tmuxSession: sessionName, status: 'in_progress' });
@@ -491,7 +506,7 @@ app.post('/api/tasks/:id/chat', (req, res) => {
 
     const task = db.getTask(id);
     if (!task) return res.status(404).json({ error: 'task not found' });
-    const runtime = ensureTaskProcess(task);
+    const runtime = ensureTaskProcess(task, { ensureTmux: false });
     if (!runtime) return res.status(400).json({ error: 'task worktree/repo path missing' });
 
     const project = task.project_id ? db.getProject(task.project_id) : null;
@@ -515,54 +530,50 @@ app.post('/api/tasks/:id/chat', (req, res) => {
     if (!hasSession) db.updateTask(id, { chatSessionId });
     db.appendTaskChatMessage(id, 'user', message);
     const scopedMessage = buildTaskSessionPrompt(task, project, message, !hasSession);
-    runTaskChatLocked(id, () => new Promise((resolve) => {
-      if (res.writableEnded || res.destroyed) {
-        resolve();
-        return;
-      }
-      let assistantOutput = '';
-      const child = startClaudeStream(
-        {
-          cwd: runtime.cwd || path.join(__dirname, '..'),
-          message: scopedMessage,
-          scope: 'task_chat',
-          taskId: id,
-          sessionId: chatSessionId,
-          resumeSession: hasSession,
-          onProcess: (proc) => {
-            activeTaskAgents.set(id, proc);
-            proc.stdout.on('data', (chunk) => {
-              assistantOutput += chunk.toString();
-            });
-            proc.stderr.on('data', (chunk) => {
-              assistantOutput += chunk.toString();
-            });
-            proc.on('close', () => {
-              if (assistantOutput.trim()) db.appendTaskChatMessage(id, 'assistant', assistantOutput);
-              if (activeTaskAgents.get(id) === proc) activeTaskAgents.delete(id);
-            });
-          },
-        },
-        res
-      );
-      const done = () => resolve();
-      child.on('close', done);
-      res.on('close', done);
-    })).catch((err) => {
-      if (!res.writableEnded) {
-        res.setHeader('Content-Type', 'text/event-stream');
-        res.setHeader('Cache-Control', 'no-cache, no-transform');
-        res.setHeader('Connection', 'keep-alive');
-        if (typeof res.flushHeaders === 'function') res.flushHeaders();
-        res.write(`data: ${JSON.stringify({ ready: true })}\n\n`);
-        res.write(`data: ${JSON.stringify({
-          error: true,
-          error_code: 'TASK_CHAT_QUEUE_ERROR',
-          text: err?.message || 'task chat queue failed',
-          done: true,
-        })}\n\n`);
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    if (typeof res.flushHeaders === 'function') res.flushHeaders();
+    res.write(`data: ${JSON.stringify({ ready: true })}\n\n`);
+
+    let clientClosed = false;
+    const heartbeat = setInterval(() => {
+      if (!res.writableEnded) res.write(': ping\n\n');
+    }, 15000);
+    const cleanup = () => clearInterval(heartbeat);
+    res.on('close', () => {
+      clientClosed = true;
+      cleanup();
+    });
+
+    taskChatRuntimeManager.send({
+      taskId: id,
+      cwd: runtime.cwd || path.join(__dirname, '..'),
+      sessionId: chatSessionId,
+      resumeSession: hasSession,
+      prompt: scopedMessage,
+      timeoutMs: 300000,
+      onAssistantText: (text) => {
+        if (clientClosed || res.writableEnded) return;
+        res.write(`data: ${JSON.stringify({ text })}\n\n`);
+      },
+    }).then((assistantOutput) => {
+      cleanup();
+      if (assistantOutput.trim()) db.appendTaskChatMessage(id, 'assistant', assistantOutput);
+      if (!clientClosed && !res.writableEnded) {
+        res.write(`data: ${JSON.stringify({ done: true, code: 0, signal: null })}\n\n`);
         res.end();
       }
+    }).catch((err) => {
+      cleanup();
+      if (res.writableEnded || clientClosed) return;
+      res.write(`data: ${JSON.stringify({
+        error: true,
+        error_code: 'TASK_CHAT_RUNTIME_ERROR',
+        text: err?.message || 'task chat runtime error',
+        done: true,
+      })}\n\n`);
+      res.end();
     });
     return;
   } catch (err) {
@@ -573,7 +584,7 @@ app.post('/api/tasks/:id/chat', (req, res) => {
 
 // For terminal/tmux chat stream, keep backward compatibility path.
 app.post('/api/tasks/:id/stop-chat', (req, res) => {
-  // Task chat now runs on persistent tmux sessions; stop-chat no longer kills task runtime.
+  // keep task runtime alive until task is done/deleted; closing chat modal should not stop it.
   res.json({ ok: true });
 });
 

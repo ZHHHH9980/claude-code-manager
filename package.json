@@ -9,7 +9,8 @@
     "ui:mobile:check": "npm --prefix client run mobile:build-check",
     "ui:mobile:watch": "node ./scripts/ui-mobile-watch.mjs",
     "mcp:mobile": "npm --prefix client run mcp:mobile",
-    "mcp:task-persistence": "npm --prefix client run mcp:task-persistence"
+    "mcp:task-persistence": "npm --prefix client run mcp:task-persistence",
+    "mcp:task-hot-session": "npm --prefix client run mcp:task-hot-session"
   },
   "dependencies": {
     "@notionhq/client": "^2.2.14",
