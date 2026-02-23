@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   MainContainer,
   ChatContainer,
@@ -22,11 +22,35 @@ export function AssistantChatWindow({
   assistantLabel = 'CCM',
   buildBody,
   onAfterDone,
+  messages,
+  onMessagesChange,
+  onClear,
   className = '',
 }) {
-  const [messages, setMessages] = useState([]);
+  const [internalMessages, setInternalMessages] = useState([]);
   const [phase, setPhase] = useState('idle');
   const abortRef = useRef(null);
+  const controlled = Array.isArray(messages);
+  const currentMessages = controlled ? messages : internalMessages;
+  const messagesRef = useRef(currentMessages);
+
+  useEffect(() => {
+    messagesRef.current = currentMessages;
+  }, [currentMessages]);
+
+  function setMessages(next) {
+    if (controlled && typeof onMessagesChange === 'function') {
+      onMessagesChange((prevRaw) => {
+        const prev = Array.isArray(prevRaw) ? prevRaw : [];
+        return typeof next === 'function' ? next(prev) : next;
+      });
+      return;
+    }
+    setInternalMessages((prevRaw) => {
+      const prev = Array.isArray(prevRaw) ? prevRaw : [];
+      return typeof next === 'function' ? next(prev) : next;
+    });
+  }
 
   const typing = useMemo(() => {
     if (phase !== 'sending' && phase !== 'streaming') return undefined;
@@ -40,13 +64,13 @@ export function AssistantChatWindow({
     setMessages((prev) => [...prev, { role: 'user', text: userText }, { role: 'assistant', text: '' }]);
     setPhase('sending');
 
-    const history = messages
+    const history = messagesRef.current
       .filter((m) => m?.role === 'user' || m?.role === 'assistant')
       .map((m) => ({ role: m.role, text: m.text }))
       .filter((m) => String(m.text || '').trim());
 
     const body = buildBody
-      ? buildBody({ message: userText, history, messages })
+      ? buildBody({ message: userText, history, messages: messagesRef.current })
       : { message: userText };
 
     const controller = new AbortController();
@@ -142,6 +166,7 @@ export function AssistantChatWindow({
     }
     setPhase('idle');
     setMessages([]);
+    if (typeof onClear === 'function') onClear();
   };
 
   return (
@@ -158,7 +183,7 @@ export function AssistantChatWindow({
         <MainContainer className="ccm-chat-main" responsive style={{ background: 'var(--surface-2)', border: 'none' }}>
           <ChatContainer className="ccm-chat-container">
             <MessageList className="ccm-chat-list" typingIndicator={typing}>
-              {messages.map((m, idx) => (
+              {currentMessages.map((m, idx) => (
                 <Message
                   key={`${m.role}-${idx}`}
                   model={{

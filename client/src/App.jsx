@@ -116,7 +116,16 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const savedId = localStorage.getItem('ccm-selected-project-id');
+    if (!savedId || projects.length === 0) return;
+    if (selectedProject?.id === savedId) return;
+    const project = projects.find((p) => String(p.id) === String(savedId));
+    if (project) setSelectedProject(project);
+  }, [projects, selectedProject]);
+
+  useEffect(() => {
     if (!selectedProject) return;
+    localStorage.setItem('ccm-selected-project-id', String(selectedProject.id));
     fetch(`/api/tasks?projectId=${selectedProject.id}`).then((r) => r.json()).then(setTasks);
   }, [selectedProject]);
 
@@ -161,6 +170,15 @@ export default function App() {
     setActiveSession(task.tmux_session);
     setActiveTaskId(task.id);
     setActiveTaskTitle(task.title || task.tmux_session);
+  }
+
+  async function handleDeleteTask(task) {
+    if (!task?.id) return;
+    const yes = window.confirm(`Delete task "${task.title}"? This will stop its runtime and remove chat history.`);
+    if (!yes) return;
+    await fetch(`/api/tasks/${task.id}`, { method: 'DELETE' });
+    if (String(activeTaskId) === String(task.id)) closeActiveTaskChat();
+    refreshAll();
   }
 
   function stopMainChat() {
@@ -476,7 +494,7 @@ export default function App() {
                 <ProjectList projects={projects} selectedId={selectedProject?.id} onSelect={setSelectedProject} mobile />
               )}
               {mobilePane === 'tasks' && (
-                <TaskBoard tasks={tasks} onOpenTerminal={handleOpenTask} onStartTask={handleStartTask} mobile />
+                <TaskBoard tasks={tasks} onOpenTerminal={handleOpenTask} onStartTask={handleStartTask} onDeleteTask={handleDeleteTask} mobile />
               )}
               {mobilePane === 'chat' && mainChatPanel}
             </div>
@@ -485,7 +503,7 @@ export default function App() {
           <>
             <ProjectList projects={projects} selectedId={selectedProject?.id} onSelect={setSelectedProject} />
             <div className="flex flex-col flex-1 min-w-0 min-h-0">
-              <TaskBoard tasks={tasks} onOpenTerminal={handleOpenTask} onStartTask={handleStartTask} />
+              <TaskBoard tasks={tasks} onOpenTerminal={handleOpenTask} onStartTask={handleStartTask} onDeleteTask={handleDeleteTask} />
               {mainChatPanel}
             </div>
           </>
@@ -513,6 +531,11 @@ export default function App() {
               endpoint={`/api/tasks/${activeTaskId}/chat`}
               placeholder="Send message to this sub task..."
               assistantLabel="Task"
+              messages={taskChatMessages}
+              onMessagesChange={setTaskChatMessages}
+              onClear={() => {
+                if (activeTaskId) fetch(`/api/tasks/${activeTaskId}/chat/history`, { method: 'DELETE' }).catch(() => {});
+              }}
               onAfterDone={refreshAll}
               className="border-t-0 flex-1 min-h-0"
             />

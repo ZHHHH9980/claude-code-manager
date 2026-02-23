@@ -10,7 +10,7 @@ function statusStyle(status) {
   return STATUS_STYLE[status] || { color: 'var(--text-3)', label: status || 'unknown' };
 }
 
-export function TaskBoard({ tasks, onOpenTerminal, onStartTask, mobile = false }) {
+export function TaskBoard({ tasks, onOpenTerminal, onStartTask, onDeleteTask, mobile = false }) {
   return (
     <section className="flex-1 p-3 md:p-4 overflow-y-auto">
       <div className="mb-3 flex items-center justify-between">
@@ -62,6 +62,19 @@ export function TaskBoard({ tasks, onOpenTerminal, onStartTask, mobile = false }
                     className={`ccm-button ccm-button-accent text-xs px-2.5 py-1.5 ${mobile ? 'w-full' : ''}`}
                   >
                     Chat
+                  </button>
+                )}
+
+                {typeof onDeleteTask === 'function' && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onDeleteTask(task);
+                    }}
+                    className={`ccm-button ccm-button-soft text-xs px-2.5 py-1.5 ${mobile ? 'w-full' : ''}`}
+                    style={{ color: 'var(--danger)' }}
+                  >
+                    Delete
                   </button>
                 )}
 
