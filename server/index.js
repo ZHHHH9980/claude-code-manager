@@ -466,10 +466,21 @@ app.post('/api/tasks/:id/chat', (req, res) => {
     }));
     db.appendTaskChatMessage(id, 'user', message);
     const scopedMessage = buildTaskScopedPrompt(task, project, message, history);
-    const prev = activeTaskAgents.get(id);
-    if (prev) {
-      try { prev.kill('SIGTERM'); } catch {}
-      activeTaskAgents.delete(id);
+    const inFlight = activeTaskAgents.get(id);
+    if (inFlight) {
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache, no-transform');
+      res.setHeader('Connection', 'keep-alive');
+      if (typeof res.flushHeaders === 'function') res.flushHeaders();
+      res.write(`data: ${JSON.stringify({ ready: true })}\n\n`);
+      res.write(`data: ${JSON.stringify({
+        error: true,
+        error_code: 'TASK_CHAT_BUSY',
+        text: 'task chat already running; wait for current response before sending next message',
+        done: true,
+      })}\n\n`);
+      res.end();
+      return;
     }
     let assistantOutput = '';
     startClaudeStream(
