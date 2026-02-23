@@ -3,7 +3,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execSync, exec } = require('child_process');
 const db = require('./db');
 const { syncTaskToNotion } = require('./notion-sync');
 const ptyManager = require('./pty-manager');
@@ -18,6 +18,7 @@ const io = new Server(server, { cors: { origin: '*' } });
 app.use(express.json());
 
 app.use((req, res, next) => {
+  if (req.path === '/api/webhook/github') return next();
   const token = process.env.ACCESS_TOKEN;
   if (!token) return next();
   const auth = req.headers.authorization;
@@ -89,6 +90,48 @@ app.post('/api/tasks/:id/stop', (req, res) => {
   const updated = db.updateTask(id, { status: 'done' });
   syncTaskToNotion(updated);
   res.json({ ok: true });
+});
+
+// Recovery
+function recoverSessions() {
+
+// Self-deploy: git pull + build + restart
+const ROOT_DIR = path.join(__dirname, '..');
+let deploying = false;
+
+function selfDeploy() {
+  if (deploying) return Promise.resolve('already deploying');
+  deploying = true;
+  return new Promise((resolve, reject) => {
+    const cmd = `cd ${ROOT_DIR} && git pull origin main && npm install && cd client && npm install && npm run build && cd .. && npm rebuild`;
+    exec(cmd, { timeout: 120000 }, (err, stdout, stderr) => {
+      deploying = false;
+      if (err) return reject(err);
+      // Restart self via pm2 after response is sent
+      setTimeout(() => {
+        exec('pm2 restart claude-manager', () => {});
+      }, 500);
+      resolve(stdout);
+    });
+  });
+}
+
+app.post('/api/deploy', async (req, res) => {
+  try {
+    const out = await selfDeploy();
+    res.json({ ok: true, output: out.slice(-500) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/webhook/github', async (req, res) => {
+  const event = req.headers['x-github-event'];
+  if (event !== 'push') return res.json({ ignored: true });
+  const branch = req.body?.ref;
+  if (branch !== 'refs/heads/main') return res.json({ ignored: true, branch });
+  res.json({ ok: true, deploying: true });
+  try { await selfDeploy(); } catch (e) { console.error('Webhook deploy failed:', e.message); }
 });
 
 // Recovery
