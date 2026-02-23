@@ -154,10 +154,20 @@ function compactText(input, maxLen = TASK_CHAT_HISTORY_TEXT_LIMIT) {
   return `${oneLine.slice(0, maxLen)}...`;
 }
 
+function shouldIncludeHistoryEntry(entry) {
+  const role = entry?.role;
+  const text = String(entry?.text || '').trim();
+  if (!text) return false;
+  if (role !== 'user' && role !== 'assistant') return false;
+  if (text.includes('You are in Task Session Chat. Strict scope rules:')) return false;
+  if (text.includes('────────────────────────────────')) return false;
+  return true;
+}
+
 function buildTaskScopedPrompt(task, project, userMessage, history = []) {
   const normalizedHistory = Array.isArray(history)
     ? history
-      .filter((entry) => (entry?.role === 'user' || entry?.role === 'assistant') && String(entry?.text || '').trim())
+      .filter((entry) => shouldIncludeHistoryEntry(entry))
       .slice(-TASK_CHAT_HISTORY_LIMIT)
       .map((entry) => ({
         role: entry.role === 'assistant' ? 'assistant' : 'user',
