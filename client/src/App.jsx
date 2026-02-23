@@ -1,9 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { ProjectList } from './components/ProjectList';
 import { TaskBoard } from './components/TaskBoard';
-import { ChatWindow } from './components/ChatWindow';
-
-const TASK_CHAT_STORAGE_KEY = 'ccm-task-chat-store-v1';
+import { AssistantChatWindow } from './components/AssistantChatWindow';
 
 function createDiagStart() {
   return {
@@ -63,6 +61,15 @@ function renderDiag(diag, nowTs) {
   };
 }
 
+function buildStatusText(diag) {
+  if (!diag) return 'Thinking...';
+  if (diag.phase === 'sending') return 'Sending...';
+  if (diag.phase === 'first_token') return 'Waiting first token...';
+  if (diag.phase === 'streaming') return 'Streaming...';
+  if (diag.phase === 'error') return 'Error';
+  return 'Thinking...';
+}
+
 export default function App() {
   const [projects, setProjects] = useState([]);
   const [tasks, setTasks] = useState([]);
@@ -80,21 +87,10 @@ export default function App() {
 
   const [taskChatInput, setTaskChatInput] = useState('');
   const [taskChatMessages, setTaskChatMessages] = useState([]);
-  const [taskChatStore, setTaskChatStore] = useState(() => {
-    try {
-      const raw = localStorage.getItem(TASK_CHAT_STORAGE_KEY);
-      if (!raw) return {};
-      const parsed = JSON.parse(raw);
-      return parsed && typeof parsed === 'object' ? parsed : {};
-    } catch {
-      return {};
-    }
-  });
   const [taskLoading, setTaskLoading] = useState(false);
   const [taskChatDiag, setTaskChatDiag] = useState(null);
   const taskChatEndRef = useRef(null);
   const taskAbortRef = useRef(null);
-  const taskChatHydratedRef = useRef(null);
   const [nowTs, setNowTs] = useState(Date.now());
 
   const [theme, setTheme] = useState(() => {
@@ -109,17 +105,6 @@ export default function App() {
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem('ccm-theme', theme);
   }, [theme]);
-
-  useEffect(() => {
-    localStorage.setItem(TASK_CHAT_STORAGE_KEY, JSON.stringify(taskChatStore));
-  }, [taskChatStore]);
-
-  useEffect(() => {
-    if (!activeTaskId) return;
-    const key = String(activeTaskId);
-    if (taskChatHydratedRef.current !== key) return;
-    setTaskChatStore((prev) => ({ ...prev, [String(activeTaskId)]: taskChatMessages }));
-  }, [activeTaskId, taskChatMessages]);
 
   useEffect(() => {
     const timer = setInterval(() => setNowTs(Date.now()), 1000);
@@ -137,7 +122,6 @@ export default function App() {
 
   function closeActiveTaskChat() {
     if (taskAbortRef.current) taskAbortRef.current.abort();
-    taskChatHydratedRef.current = null;
     setActiveSession(null);
     setActiveTaskId(null);
     setActiveTaskTitle('');
@@ -177,6 +161,18 @@ export default function App() {
     setActiveSession(task.tmux_session);
     setActiveTaskId(task.id);
     setActiveTaskTitle(task.title || task.tmux_session);
+  }
+
+  function stopMainChat() {
+    if (!chatAbortRef.current) return;
+    chatAbortRef.current.abort();
+    setChatDiag((prev) => finalizeDiag(prev || createDiagStart(), 'error', 'Stopped by user'));
+  }
+
+  function stopTaskChat() {
+    if (!taskAbortRef.current) return;
+    taskAbortRef.current.abort();
+    setTaskChatDiag((prev) => finalizeDiag(prev || createDiagStart(), 'error', 'Stopped by user'));
   }
 
   async function handleMainChatSubmit(e, directMessage) {
@@ -272,9 +268,6 @@ export default function App() {
     if (e?.preventDefault) e.preventDefault();
     const msg = String(directMessage ?? taskChatInput).trim();
     if (!activeSession || !activeTaskId || !msg || taskLoading) return;
-    const history = taskChatMessages
-      .filter((entry) => (entry?.role === 'user' || entry?.role === 'assistant') && String(entry?.text || '').trim())
-      .map((entry) => ({ role: entry.role, text: String(entry.text) }));
     setTaskChatInput('');
     setTaskLoading(true);
     setTaskChatMessages((prev) => [...prev, { role: 'user', text: msg }, { role: 'assistant', text: '' }]);
@@ -286,7 +279,7 @@ export default function App() {
       const res = await fetch(`/api/tasks/${activeTaskId}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg, history }),
+        body: JSON.stringify({ message: msg }),
         signal: controller.signal,
       });
       if (!res.ok) {
@@ -358,20 +351,36 @@ export default function App() {
 
   useEffect(() => {
     if (!activeSession || !activeTaskId) return;
-    const key = String(activeTaskId);
+    let cancelled = false;
     setTaskChatInput('');
     setTaskLoading(false);
     setTaskChatDiag(null);
-    const cached = taskChatStore[key];
-    if (Array.isArray(cached) && cached.length > 0) {
-      taskChatHydratedRef.current = key;
-      setTaskChatMessages(cached);
-      return;
-    }
-    taskChatHydratedRef.current = key;
-    setTaskChatMessages([
-      { role: 'assistant', text: `Connected to ${activeTaskTitle || activeSession}. You can chat with this task now.` },
-    ]);
+    fetch(`/api/tasks/${activeTaskId}/chat/history`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return;
+        const messages = Array.isArray(data?.messages)
+          ? data.messages
+            .filter((entry) => (entry?.role === 'user' || entry?.role === 'assistant') && String(entry?.text || '').trim())
+            .map((entry) => ({ role: entry.role, text: String(entry.text) }))
+          : [];
+        if (messages.length > 0) {
+          setTaskChatMessages(messages);
+          return;
+        }
+        setTaskChatMessages([
+          { role: 'assistant', text: `Connected to ${activeTaskTitle || activeSession}. You can chat with this task now.` },
+        ]);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setTaskChatMessages([
+          { role: 'assistant', text: `Connected to ${activeTaskTitle || activeSession}. You can chat with this task now.` },
+        ]);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [activeSession, activeTaskTitle, activeTaskId]);
 
   useEffect(() => {
@@ -406,21 +415,12 @@ export default function App() {
 
   const mainChatPanel = (
     <div style={{ minHeight: isMobile ? '0' : '250px', height: isMobile ? '100%' : '40%' }}>
-      <ChatWindow
+      <AssistantChatWindow
         title="CCM Agent Chat"
-        statusText={loading ? 'Thinking...' : 'Idle'}
-        messages={chatMessages}
-        inputValue={chatInput}
-        onInputChange={setChatInput}
-        onSubmit={handleMainChatSubmit}
-        onClear={() => {
-          setChatMessages([]);
-          setChatDiag(null);
-        }}
-        diagnostics={renderDiag(chatDiag, nowTs)}
+        endpoint="/api/agent"
         placeholder="Tell CCM what to do..."
-        loading={loading}
-        endRef={chatEndRef}
+        assistantLabel="CCM"
+        onAfterDone={refreshAll}
       />
     </div>
   );
@@ -508,25 +508,12 @@ export default function App() {
               </button>
             </div>
 
-            <ChatWindow
+            <AssistantChatWindow
               title="Sub Claude Chat"
-              statusText={taskLoading ? 'Streaming...' : 'Attached'}
-              messages={taskChatMessages}
-              inputValue={taskChatInput}
-              onInputChange={setTaskChatInput}
-              onSubmit={handleTaskChatSubmit}
-              onClear={() => {
-                if (activeTaskId) {
-                  setTaskChatStore((prev) => ({ ...prev, [String(activeTaskId)]: [] }));
-                }
-                setTaskChatMessages([]);
-                setTaskChatDiag(null);
-              }}
-              diagnostics={renderDiag(taskChatDiag, nowTs)}
+              endpoint={`/api/tasks/${activeTaskId}/chat`}
               placeholder="Send message to this sub task..."
               assistantLabel="Task"
-              loading={taskLoading}
-              endRef={taskChatEndRef}
+              onAfterDone={refreshAll}
               className="border-t-0 flex-1 min-h-0"
             />
           </div>
