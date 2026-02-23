@@ -154,10 +154,10 @@ export function AssistantChatWindow({
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-hidden">
-        <MainContainer responsive style={{ background: 'transparent' }}>
-          <ChatContainer>
-            <MessageList typingIndicator={typing}>
+      <div className="flex-1 min-h-0 overflow-hidden ccm-chat-ui">
+        <MainContainer className="ccm-chat-main" responsive style={{ background: 'var(--surface-2)', border: 'none' }}>
+          <ChatContainer className="ccm-chat-container">
+            <MessageList className="ccm-chat-list" typingIndicator={typing}>
               {messages.map((m, idx) => (
                 <Message
                   key={`${m.role}-${idx}`}
@@ -171,6 +171,7 @@ export function AssistantChatWindow({
               ))}
             </MessageList>
             <MessageInput
+              className="ccm-chat-input"
               placeholder={placeholder || 'Type a message...'}
               attachButton={false}
               sendButton
