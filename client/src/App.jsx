@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { ProjectList } from './components/ProjectList';
 import { TaskBoard } from './components/TaskBoard';
 import { Terminal } from './components/Terminal';
@@ -11,19 +11,11 @@ export default function App() {
   const [selectedProject, setSelectedProject] = useState(null);
   const [activeSession, setActiveSession] = useState(null);
   const [activeTmuxCmd, setActiveTmuxCmd] = useState('');
-  const [showNewTask, setShowNewTask] = useState(false);
-  const [showNewProject, setShowNewProject] = useState(false);
-  const [newTask, setNewTask] = useState({ title: '', branch: '' });
-  const [newProject, setNewProject] = useState({ name: '', repoPath: '' });
-  const [deploying, setDeploying] = useState(false);
-
-  async function handleDeploy() {
-    setDeploying(true);
-    try {
-      await fetch('/api/deploy', { method: 'POST' });
-    } catch {}
-    setTimeout(() => setDeploying(false), 3000);
-  }
+  const [chatInput, setChatInput] = useState('');
+  const [chatMessages, setChatMessages] = useState([]);
+  const [agentMessages, setAgentMessages] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const chatEndRef = useRef(null);
 
   useEffect(() => {
     fetch('/api/projects').then(r => r.json()).then(setProjects);
@@ -35,12 +27,24 @@ export default function App() {
       .then(r => r.json()).then(setTasks);
   }, [selectedProject]);
 
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatMessages]);
+
+  function refreshAll() {
+    fetch('/api/projects').then(r => r.json()).then(setProjects);
+    if (selectedProject) {
+      fetch(`/api/tasks?projectId=${selectedProject.id}`)
+        .then(r => r.json()).then(setTasks);
+    }
+  }
+
   async function handleStartTask(task, mode) {
     const res = await fetch(`/api/tasks/${task.id}/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        worktreePath: task.worktree_path || selectedProject.repo_path,
+        worktreePath: task.worktree_path || selectedProject?.repo_path,
         branch: task.branch || 'main',
         model: task.model,
         mode: mode || 'claude',
@@ -49,109 +53,47 @@ export default function App() {
     const { sessionName, tmuxCmd } = await res.json();
     setActiveSession(sessionName);
     setActiveTmuxCmd(tmuxCmd);
-    refreshTasks();
+    refreshAll();
   }
 
-  function refreshTasks() {
-    if (!selectedProject) return;
-    fetch(`/api/tasks?projectId=${selectedProject.id}`)
-      .then(r => r.json()).then(setTasks);
-  }
-
-  async function handleCreateTask(e) {
+  async function handleChat(e) {
     e.preventDefault();
-    if (!selectedProject || !newTask.title) return;
-    await fetch('/api/tasks', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...newTask, projectId: selectedProject.id }),
-    });
-    setNewTask({ title: '', branch: '' });
-    setShowNewTask(false);
-    refreshTasks();
-  }
+    if (!chatInput.trim() || loading) return;
+    const userMsg = chatInput.trim();
+    setChatInput('');
+    setChatMessages(prev => [...prev, { role: 'user', text: userMsg }]);
+    setLoading(true);
 
-  async function handleCreateProject(e) {
-    e.preventDefault();
-    if (!newProject.name) return;
-    const res = await fetch('/api/projects', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newProject),
-    });
-    const project = await res.json();
-    setProjects(prev => [...prev, project]);
-    setSelectedProject(project);
-    setNewProject({ name: '', repoPath: '' });
-    setShowNewProject(false);
+    try {
+      const msgs = [...agentMessages, { role: 'user', content: userMsg }];
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: msgs }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        setChatMessages(prev => [...prev, { role: 'assistant', text: `Error: ${data.error}` }]);
+      } else {
+        setChatMessages(prev => [...prev, { role: 'assistant', text: data.text }]);
+        setAgentMessages(data.messages);
+        if (data.startAction) {
+          const task = tasks.find(t => t.id === data.startAction.taskId);
+          if (task) handleStartTask(task, data.startAction.mode);
+        }
+        refreshAll();
+      }
+    } catch (err) {
+      setChatMessages(prev => [...prev, { role: 'assistant', text: `Error: ${err.message}` }]);
+    }
+    setLoading(false);
   }
 
   return (
     <div className="flex flex-col h-screen bg-gray-900 text-white font-mono">
       <div className="flex items-center justify-between px-4 py-2 border-b border-gray-700">
         <span className="font-bold text-blue-400">Claude Code Manager</span>
-        <div className="flex gap-2">
-          <button
-            onClick={handleDeploy}
-            disabled={deploying}
-            className={`text-xs px-3 py-1 rounded ${deploying ? 'bg-yellow-700 text-yellow-300' : 'bg-gray-700 hover:bg-gray-600'}`}
-          >
-            {deploying ? 'Syncing...' : 'Sync'}
-          </button>
-          <button
-            onClick={() => setShowNewProject(true)}
-            className="text-xs bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded"
-          >
-            + Project
-          </button>
-          <button
-            onClick={() => selectedProject && setShowNewTask(true)}
-            className={`text-xs px-3 py-1 rounded ${selectedProject ? 'bg-blue-700 hover:bg-blue-600' : 'bg-gray-700 text-gray-500 cursor-not-allowed'}`}
-          >
-            + Task
-          </button>
-        </div>
       </div>
-
-      {showNewProject && (
-        <form onSubmit={handleCreateProject} className="flex gap-2 px-4 py-2 bg-gray-800 border-b border-gray-700">
-          <input
-            placeholder="Project name"
-            value={newProject.name}
-            onChange={e => setNewProject(p => ({ ...p, name: e.target.value }))}
-            className="text-sm bg-gray-700 px-2 py-1 rounded flex-1"
-            autoFocus
-          />
-          <input
-            placeholder="Repo path (e.g. /opt/myrepo)"
-            value={newProject.repoPath}
-            onChange={e => setNewProject(p => ({ ...p, repoPath: e.target.value }))}
-            className="text-sm bg-gray-700 px-2 py-1 rounded flex-1"
-          />
-          <button type="submit" className="text-xs bg-green-700 hover:bg-green-600 px-3 py-1 rounded">Create</button>
-          <button type="button" onClick={() => setShowNewProject(false)} className="text-xs bg-gray-600 px-3 py-1 rounded">Cancel</button>
-        </form>
-      )}
-
-      {showNewTask && (
-        <form onSubmit={handleCreateTask} className="flex gap-2 px-4 py-2 bg-gray-800 border-b border-gray-700">
-          <input
-            placeholder="Task title"
-            value={newTask.title}
-            onChange={e => setNewTask(t => ({ ...t, title: e.target.value }))}
-            className="text-sm bg-gray-700 px-2 py-1 rounded flex-1"
-            autoFocus
-          />
-          <input
-            placeholder="Branch (e.g. feature/xxx)"
-            value={newTask.branch}
-            onChange={e => setNewTask(t => ({ ...t, branch: e.target.value }))}
-            className="text-sm bg-gray-700 px-2 py-1 rounded flex-1"
-          />
-          <button type="submit" className="text-xs bg-green-700 hover:bg-green-600 px-3 py-1 rounded">Create</button>
-          <button type="button" onClick={() => setShowNewTask(false)} className="text-xs bg-gray-600 px-3 py-1 rounded">Cancel</button>
-        </form>
-      )}
 
       <div className="flex flex-1 overflow-hidden">
         <ProjectList
@@ -168,28 +110,45 @@ export default function App() {
             }}
             onStartTask={handleStartTask}
           />
+
           {activeSession && (
             <div className="h-64 border-t border-gray-700 flex flex-col">
               <div className="flex items-center gap-3 px-3 py-1 bg-gray-800 text-xs text-gray-400">
                 <span>Terminal: {activeSession}</span>
-                <button
-                  onClick={() => navigator.clipboard.writeText(activeTmuxCmd)}
-                  className="ml-auto hover:text-white"
-                >
-                  Copy tmux cmd
-                </button>
-                <button
-                  onClick={() => setActiveSession(null)}
-                  className="hover:text-white"
-                >
-                  Detach
-                </button>
+                <button onClick={() => navigator.clipboard.writeText(activeTmuxCmd)} className="ml-auto hover:text-white">Copy tmux cmd</button>
+                <button onClick={() => setActiveSession(null)} className="hover:text-white">Detach</button>
               </div>
               <div className="flex-1 overflow-hidden">
                 <Terminal socket={socket} sessionName={activeSession} />
               </div>
             </div>
           )}
+
+          <div className="border-t border-gray-700 flex flex-col" style={{ height: '200px' }}>
+            <div className="flex-1 overflow-y-auto px-3 py-2 space-y-2">
+              {chatMessages.length === 0 && (
+                <div className="text-gray-500 text-xs">Tell me what you want to do. e.g. "给 CCM 加个任务：优化终端体验"</div>
+              )}
+              {chatMessages.map((msg, i) => (
+                <div key={i} className={`text-sm ${msg.role === 'user' ? 'text-blue-300' : 'text-gray-300'}`}>
+                  <span className="text-xs text-gray-500 mr-2">{msg.role === 'user' ? '>' : 'CCM'}</span>
+                  {msg.text}
+                </div>
+              ))}
+              {loading && <div className="text-xs text-yellow-400">thinking...</div>}
+              <div ref={chatEndRef} />
+            </div>
+            <form onSubmit={handleChat} className="flex gap-2 px-3 py-2 border-t border-gray-800">
+              <input
+                value={chatInput}
+                onChange={e => setChatInput(e.target.value)}
+                placeholder="Tell CCM what to do..."
+                className="flex-1 bg-gray-800 text-sm px-3 py-1.5 rounded outline-none focus:ring-1 focus:ring-blue-500"
+                autoFocus
+              />
+              <button type="submit" disabled={loading} className="text-xs bg-blue-700 hover:bg-blue-600 px-4 py-1.5 rounded disabled:opacity-50">Send</button>
+            </form>
+          </div>
         </div>
       </div>
     </div>

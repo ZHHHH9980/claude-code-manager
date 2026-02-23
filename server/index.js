@@ -8,6 +8,7 @@ const db = require('./db');
 const { syncTaskToNotion } = require('./notion-sync');
 const ptyManager = require('./pty-manager');
 const { watchProgress, unwatchProgress } = require('./file-watcher');
+const agent = require('./agent');
 
 const WORKFLOW_DIR = process.env.WORKFLOW_DIR || path.join(process.env.HOME, 'Documents/claude-workflow');
 
@@ -90,6 +91,18 @@ app.post('/api/tasks/:id/stop', (req, res) => {
   const updated = db.updateTask(id, { status: 'done' });
   syncTaskToNotion(updated);
   res.json({ ok: true });
+});
+
+// Agent chat
+app.post('/api/chat', async (req, res) => {
+  try {
+    const { messages } = req.body;
+    const result = await agent.chat(messages);
+    res.json(result);
+  } catch (e) {
+    console.error('Agent error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // Self-deploy: git pull + build + restart
