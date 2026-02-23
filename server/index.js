@@ -4,7 +4,8 @@ const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
 const { execSync } = require('child_process');
-const notion = require('./notion');
+const db = require('./db');
+const { syncTaskToNotion } = require('./notion-sync');
 const ptyManager = require('./pty-manager');
 const { watchProgress, unwatchProgress } = require('./file-watcher');
 
@@ -26,28 +27,41 @@ app.use((req, res, next) => {
 
 app.use(express.static(path.join(__dirname, '../client/dist')));
 
-app.get('/api/projects', async (req, res) => {
-  res.json(await notion.getProjects());
+// Projects
+app.get('/api/projects', (req, res) => {
+  res.json(db.getProjects());
 });
 
-app.get('/api/tasks', async (req, res) => {
+app.post('/api/projects', (req, res) => {
+  const project = db.createProject(req.body);
+  res.json(project);
+});
+
+// Tasks
+app.get('/api/tasks', (req, res) => {
   const { projectId } = req.query;
-  res.json(await notion.getTasks(projectId));
+  res.json(db.getTasks(projectId));
 });
 
-app.post('/api/tasks', async (req, res) => {
-  const task = await notion.createTask(req.body);
+app.post('/api/tasks', (req, res) => {
+  const task = db.createTask(req.body);
+  syncTaskToNotion(task);
   res.json(task);
 });
 
-app.post('/api/tasks/:id/start', async (req, res) => {
+app.post('/api/tasks/:id/start', (req, res) => {
   const { id } = req.params;
   const { worktreePath, branch, model, mode } = req.body;
   const sessionName = `claude-${branch.replace(/\//g, '-')}`;
 
-  await notion.updateTask(id, { status: 'in_progress', worktreePath, tmuxSession: sessionName });
+  const task = db.updateTask(id, {
+    status: 'in_progress',
+    worktreePath,
+    tmuxSession: sessionName,
+  });
+  syncTaskToNotion(task);
 
-  // Initialize claude-workflow in worktree if not already done
+  // Initialize claude-workflow in worktree
   try {
     execSync(`${WORKFLOW_DIR}/install.sh init`, { cwd: worktreePath, stdio: 'ignore' });
   } catch (e) {
@@ -67,33 +81,35 @@ app.post('/api/tasks/:id/start', async (req, res) => {
   res.json({ sessionName, tmuxCmd: ptyManager.getTmuxAttachCmd(sessionName) });
 });
 
-app.post('/api/tasks/:id/stop', async (req, res) => {
+app.post('/api/tasks/:id/stop', (req, res) => {
   const { id } = req.params;
-  const tasks = await notion.getTasks();
-  const task = tasks.find(t => t.id === id);
-  if (task?.tmuxSession) ptyManager.killSession(task.tmuxSession);
-  if (task?.worktreePath) unwatchProgress(task.worktreePath);
-  await notion.updateTask(id, { status: 'done' });
+  const task = db.getTask(id);
+  if (task?.tmux_session) ptyManager.killSession(task.tmux_session);
+  if (task?.worktree_path) unwatchProgress(task.worktree_path);
+  const updated = db.updateTask(id, { status: 'done' });
+  syncTaskToNotion(updated);
   res.json({ ok: true });
 });
 
-async function recoverSessions() {
+// Recovery
+function recoverSessions() {
   const aliveSessions = ptyManager.listAliveSessions();
-  const tasks = await notion.getTasks();
+  const tasks = db.getTasks();
   for (const task of tasks) {
-    if (task.status === 'in_progress' && task.tmuxSession) {
-      if (aliveSessions.includes(task.tmuxSession)) {
-        ptyManager.attachSession(task.tmuxSession);
-        if (task.worktreePath) watchProgress(task.worktreePath, task.id);
-        console.log(`Recovered session: ${task.tmuxSession}`);
+    if (task.status === 'in_progress' && task.tmux_session) {
+      if (aliveSessions.includes(task.tmux_session)) {
+        ptyManager.attachSession(task.tmux_session);
+        if (task.worktree_path) watchProgress(task.worktree_path, task.id);
+        console.log(`Recovered session: ${task.tmux_session}`);
       } else {
-        await notion.updateTask(task.id, { status: 'interrupted' });
-        console.log(`Session dead, marked interrupted: ${task.tmuxSession}`);
+        db.updateTask(task.id, { status: 'interrupted' });
+        console.log(`Session dead, marked interrupted: ${task.tmux_session}`);
       }
     }
   }
 }
 
+// WebSocket
 io.on('connection', (socket) => {
   let currentSession = null;
 
@@ -118,7 +134,7 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, async () => {
+server.listen(PORT, () => {
   console.log(`Claude Code Manager running on http://localhost:${PORT}`);
-  await recoverSessions();
+  recoverSessions();
 });

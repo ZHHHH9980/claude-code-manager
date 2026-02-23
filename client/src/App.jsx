@@ -27,7 +27,7 @@ export default function App() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        worktreePath: task.worktreePath || selectedProject.repoPath,
+        worktreePath: task.worktree_path || selectedProject.repo_path,
         branch: task.branch || 'main',
         model: task.model,
         mode: mode || 'claude',
@@ -59,8 +59,8 @@ export default function App() {
           <TaskBoard
             tasks={tasks}
             onOpenTerminal={(task) => {
-              setActiveSession(task.tmuxSession);
-              setActiveTmuxCmd(`tmux attach -t ${task.tmuxSession}`);
+              setActiveSession(task.tmux_session);
+              setActiveTmuxCmd(`tmux attach -t ${task.tmux_session}`);
             }}
             onStartTask={handleStartTask}
           />
