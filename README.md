@@ -99,4 +99,4 @@ chmod +x deploy.sh
 
 - **Server**: Express, socket.io, node-pty, better-sqlite3
 - **Client**: React, xterm.js, Tailwind CSS, Vite
-- **Infra**: tmux, pm2, rsync deploy
+- **Infra**: tmux, pm2, GitHub webhook auto-deploy
