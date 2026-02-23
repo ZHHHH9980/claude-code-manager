@@ -93,6 +93,21 @@ app.post('/api/tasks/:id/stop', (req, res) => {
   res.json({ ok: true });
 });
 
+app.get('/api/tasks/:id/chat/history', (req, res) => {
+  const { id } = req.params;
+  const task = db.getTask(id);
+  if (!task) return res.status(404).json({ error: 'task not found' });
+  res.json({ messages: db.getTaskChatMessages(id, 300) });
+});
+
+app.delete('/api/tasks/:id/chat/history', (req, res) => {
+  const { id } = req.params;
+  const task = db.getTask(id);
+  if (!task) return res.status(404).json({ error: 'task not found' });
+  db.clearTaskChatMessages(id);
+  res.json({ ok: true });
+});
+
 function logChatMetric(event, payload) {
   console.log(`[chat-metric] ${JSON.stringify({ event, ...payload })}`);
 }
@@ -101,14 +116,23 @@ function isoNow(ts = Date.now()) {
   return new Date(ts).toISOString();
 }
 
+const TASK_CHAT_HISTORY_LIMIT = 3;
+const TASK_CHAT_HISTORY_TEXT_LIMIT = 120;
+
+function compactText(input, maxLen = TASK_CHAT_HISTORY_TEXT_LIMIT) {
+  const oneLine = String(input || '').replace(/\s+/g, ' ').trim();
+  if (oneLine.length <= maxLen) return oneLine;
+  return `${oneLine.slice(0, maxLen)}...`;
+}
+
 function buildTaskScopedPrompt(task, project, userMessage, history = []) {
   const normalizedHistory = Array.isArray(history)
     ? history
-      .filter((entry) => (entry?.role === 'user' || entry?.role === 'assistant') && String(entry?.text || '').trim())
-      .slice(-24)
+      .filter((entry) => entry?.role === 'user' && String(entry?.text || '').trim())
+      .slice(-TASK_CHAT_HISTORY_LIMIT)
       .map((entry) => ({
-        role: entry.role === 'assistant' ? 'assistant' : 'user',
-        text: String(entry.text).trim(),
+        role: 'user',
+        text: compactText(entry.text),
       }))
     : [];
 
@@ -138,9 +162,47 @@ function buildTaskScopedPrompt(task, project, userMessage, history = []) {
     ...historyLines,
     '',
     'Current user message:',
-    String(userMessage || '').trim(),
+    compactText(userMessage, 600),
   ];
   return lines.join('\n');
+}
+
+function isTaskStatusQuery(message) {
+  const text = String(message || '').toLowerCase().trim();
+  if (!text) return false;
+  const patterns = [
+    /进度/,
+    /状态/,
+    /什么进展/,
+    /目前.*(怎么样|如何|进度)/,
+    /还要多久/,
+    /现在.*(干嘛|做什么)/,
+    /\bprogress\b/,
+    /\bstatus\b/,
+    /\bupdate\b/,
+    /\bwhat('?s| is)?\s+the\s+progress\b/,
+  ];
+  return patterns.some((re) => re.test(text));
+}
+
+function buildTaskStatusReply(task, project, hasActiveProcess) {
+  const status = task?.status || 'unknown';
+  const title = task?.title || '(untitled)';
+  const branch = task?.branch || '(none)';
+  const updatedAt = task?.updated_at || task?.created_at || '(unknown)';
+  const projectName = project?.name || '(unknown)';
+  const running = hasActiveProcess ? 'yes' : 'no';
+  return [
+    'Current task progress summary:',
+    `- title: ${title}`,
+    `- status: ${status}`,
+    `- running process attached: ${running}`,
+    `- branch: ${branch}`,
+    `- project: ${projectName}`,
+    `- last updated: ${updatedAt}`,
+    '',
+    'If you want, I can continue with a concrete next action (for example: integrate ChatWindow, run build, or deploy).',
+  ].join('\n');
 }
 
 function startClaudeStream({ cwd, message, onProcess, scope, taskId = null }, res) {
@@ -287,7 +349,7 @@ app.post('/api/agent', (req, res) => {
 const activeTaskAgents = new Map();
 app.post('/api/tasks/:id/chat', (req, res) => {
   const { id } = req.params;
-  const { message, history } = req.body;
+  const { message } = req.body;
   if (!message) return res.status(400).json({ error: 'message required' });
 
   const task = db.getTask(id);
@@ -299,6 +361,22 @@ app.post('/api/tasks/:id/chat', (req, res) => {
   }
   if (!cwd) return res.status(400).json({ error: 'task worktree/repo path missing' });
   const project = task.project_id ? db.getProject(task.project_id) : null;
+  if (isTaskStatusQuery(message)) {
+    const quickReply = buildTaskStatusReply(task, project, activeTaskAgents.has(id));
+    db.appendTaskChatMessage(id, 'user', message);
+    db.appendTaskChatMessage(id, 'assistant', quickReply);
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    if (typeof res.flushHeaders === 'function') res.flushHeaders();
+    res.write(`data: ${JSON.stringify({ ready: true })}\n\n`);
+    res.write(`data: ${JSON.stringify({ text: quickReply })}\n\n`);
+    res.write(`data: ${JSON.stringify({ done: true, code: 0, signal: null, shortcut: 'task_status' })}\n\n`);
+    res.end();
+    return;
+  }
+  const history = db.getTaskChatMessages(id, 24).map((entry) => ({ role: entry.role, text: entry.text }));
+  db.appendTaskChatMessage(id, 'user', message);
   const scopedMessage = buildTaskScopedPrompt(task, project, message, history);
 
   const prev = activeTaskAgents.get(id);
@@ -307,6 +385,7 @@ app.post('/api/tasks/:id/chat', (req, res) => {
     activeTaskAgents.delete(id);
   }
 
+  let assistantOutput = '';
   startClaudeStream(
     {
       cwd,
@@ -315,7 +394,14 @@ app.post('/api/tasks/:id/chat', (req, res) => {
       taskId: id,
       onProcess: (child) => {
         activeTaskAgents.set(id, child);
+        child.stdout.on('data', (chunk) => {
+          assistantOutput += chunk.toString();
+        });
+        child.stderr.on('data', (chunk) => {
+          assistantOutput += chunk.toString();
+        });
         child.on('close', () => {
+          db.appendTaskChatMessage(id, 'assistant', assistantOutput);
           if (activeTaskAgents.get(id) === child) activeTaskAgents.delete(id);
         });
       },

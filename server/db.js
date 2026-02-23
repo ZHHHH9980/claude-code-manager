@@ -35,6 +35,15 @@ db.exec(`
     updated_at TEXT DEFAULT (datetime('now')),
     FOREIGN KEY (project_id) REFERENCES projects(id)
   );
+
+  CREATE TABLE IF NOT EXISTS task_chat_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    text TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (task_id) REFERENCES tasks(id)
+  );
 `);
 
 function uid() {
@@ -90,4 +99,39 @@ function updateTask(id, updates) {
   return getTask(id);
 }
 
-module.exports = { getProjects, getProject, createProject, getTasks, getTask, createTask, updateTask };
+function getTaskChatMessages(taskId, limit = 200) {
+  const safeLimit = Math.max(1, Math.min(Number(limit) || 200, 500));
+  return db.prepare(
+    `SELECT role, text, created_at
+     FROM task_chat_messages
+     WHERE task_id = ?
+     ORDER BY id ASC
+     LIMIT ?`
+  ).all(taskId, safeLimit);
+}
+
+function appendTaskChatMessage(taskId, role, text) {
+  const safeRole = role === 'assistant' ? 'assistant' : 'user';
+  const safeText = String(text || '').trim();
+  if (!safeText) return;
+  db.prepare(
+    'INSERT INTO task_chat_messages (task_id, role, text) VALUES (?, ?, ?)'
+  ).run(taskId, safeRole, safeText);
+}
+
+function clearTaskChatMessages(taskId) {
+  db.prepare('DELETE FROM task_chat_messages WHERE task_id = ?').run(taskId);
+}
+
+module.exports = {
+  getProjects,
+  getProject,
+  createProject,
+  getTasks,
+  getTask,
+  createTask,
+  updateTask,
+  getTaskChatMessages,
+  appendTaskChatMessage,
+  clearTaskChatMessages,
+};
