@@ -30,6 +30,14 @@ async function waitForServer(url, timeoutMs = 30000) {
   throw new Error(`Timed out waiting for dev server: ${url}`);
 }
 
+async function sendByComposer(page, text, useLast = false) {
+  const editor = useLast ? page.locator('[contenteditable="true"]').last() : page.locator('[contenteditable="true"]').first();
+  const sendBtn = useLast ? page.locator('button.cs-button--send').last() : page.locator('button.cs-button--send').first();
+  await editor.click();
+  await page.keyboard.type(text);
+  await sendBtn.click();
+}
+
 async function run() {
   const vite = startVite();
   let browser;
@@ -111,10 +119,8 @@ async function run() {
       await page.getByText('Task modal auto close').first().waitFor({ timeout: 10000 });
       await page.getByRole('button', { name: 'Chat' }).click();
       await page.getByText('Task Session Chat').waitFor({ timeout: 10000 });
-      const input = page.getByPlaceholder('Send message to this sub task...');
-      await input.fill('结束当前任务');
       const chatReq = page.waitForRequest((req) => req.url().includes('/api/tasks/t1/chat') && req.method() === 'POST', { timeout: 10000 });
-      await input.press('Enter');
+      await sendByComposer(page, '结束当前任务', true);
       await chatReq;
 
       if (transition === 'in_progress') {

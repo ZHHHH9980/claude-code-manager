@@ -348,7 +348,12 @@ function startClaudeStream({ cwd, message, onProcess, scope, taskId = null }, re
     clearInterval(heartbeat);
     finalize('process_error', { error: err.message, exit_code: null });
     if (!res.writableEnded) {
-      res.write(`data: ${JSON.stringify({ error: true, text: err.message, done: true })}\n\n`);
+      res.write(`data: ${JSON.stringify({
+        error: true,
+        error_code: 'PROCESS_ERROR',
+        text: `agent process error: ${err.message}`,
+        done: true,
+      })}\n\n`);
       res.end();
     }
   });
@@ -357,7 +362,19 @@ function startClaudeStream({ cwd, message, onProcess, scope, taskId = null }, re
     clearInterval(heartbeat);
     finalize(signal ? 'signal_exit' : 'process_exit', { exit_code: code, exit_signal: signal || null });
     if (!res.writableEnded) {
-      res.write(`data: ${JSON.stringify({ done: true, code, signal })}\n\n`);
+      const isAbnormal = Boolean(signal) || (typeof code === 'number' && code !== 0);
+      if (isAbnormal) {
+        res.write(`data: ${JSON.stringify({
+          error: true,
+          error_code: 'PROCESS_EXIT',
+          text: `agent exited unexpectedly (code=${code ?? 'null'}, signal=${signal ?? 'null'})`,
+          done: true,
+          code,
+          signal,
+        })}\n\n`);
+      } else {
+        res.write(`data: ${JSON.stringify({ done: true, code, signal })}\n\n`);
+      }
       res.end();
     }
   });
@@ -366,7 +383,12 @@ function startClaudeStream({ cwd, message, onProcess, scope, taskId = null }, re
     finalize('timeout', { exit_code: null });
     if (!child.killed) child.kill('SIGTERM');
     if (!res.writableEnded) {
-      res.write(`data: ${JSON.stringify({ error: true, text: '[Timeout after 5 minutes]', done: true })}\n\n`);
+      res.write(`data: ${JSON.stringify({
+        error: true,
+        error_code: 'TIMEOUT',
+        text: 'agent timeout after 5 minutes',
+        done: true,
+      })}\n\n`);
       res.end();
     }
   }, 300000);

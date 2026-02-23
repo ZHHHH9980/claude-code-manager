@@ -8,7 +8,8 @@
     "mobile:build-check": "npm run mobile:check && npm run build",
     "mcp:mobile": "node ./scripts/mcp-mobile-smoke.mjs",
     "mcp:task-close": "node ./scripts/mcp-task-modal-close.mjs",
-    "mcp:task-persistence": "node ./scripts/mcp-task-persistence.mjs"
+    "mcp:task-persistence": "node ./scripts/mcp-task-persistence.mjs",
+    "mcp:network-error": "node ./scripts/mcp-network-error-repro.mjs"
   },
   "dependencies": {
     "@ant-design/x": "^2.2.2",

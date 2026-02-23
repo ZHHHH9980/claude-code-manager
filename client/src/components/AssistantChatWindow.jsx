@@ -15,6 +15,22 @@ function getStatusLabel(phase) {
   return 'Idle';
 }
 
+function normalizeErrMessage(err) {
+  const raw = String(err?.message || '').trim();
+  if (!raw) return 'request failed';
+  if (/Failed to fetch|NetworkError|network error/i.test(raw)) {
+    return 'network error: request did not reach server or stream was interrupted';
+  }
+  return raw;
+}
+
+function fromEventError(event) {
+  const text = String(event?.text || '').trim();
+  const code = event?.error_code ? ` [${event.error_code}]` : '';
+  if (text) return `${text}${code}`;
+  return `request failed${code}`;
+}
+
 export function AssistantChatWindow({
   title,
   endpoint,
@@ -93,6 +109,7 @@ export function AssistantChatWindow({
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
+      let sawDoneEvent = false;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -118,7 +135,7 @@ export function AssistantChatWindow({
           }
 
           if (event.ready) continue;
-          if (event.error) throw new Error(event.text || 'request failed');
+          if (event.error) throw new Error(fromEventError(event));
 
           if (event.text) {
             setPhase('streaming');
@@ -133,12 +150,21 @@ export function AssistantChatWindow({
           }
 
           if (event.done) {
+            sawDoneEvent = true;
+            if (event.error) throw new Error(fromEventError(event));
+            if (event.signal || (typeof event.code === 'number' && event.code !== 0)) {
+              throw new Error(`agent exited unexpectedly (code=${event.code ?? 'null'}, signal=${event.signal ?? 'null'})`);
+            }
             setPhase('idle');
             abortRef.current = null;
             onAfterDone?.();
             return;
           }
         }
+      }
+
+      if (!sawDoneEvent) {
+        throw new Error('stream closed before completion (missing done event)');
       }
 
       setPhase('idle');
@@ -149,7 +175,7 @@ export function AssistantChatWindow({
       setMessages((prev) => {
         const updated = [...prev];
         const last = updated[updated.length - 1];
-        const text = `Error: ${err?.message || 'request failed'}`;
+        const text = `Error: ${normalizeErrMessage(err)}`;
         if (last?.role === 'assistant') last.text = text;
         else updated.push({ role: 'assistant', text });
         return updated;
