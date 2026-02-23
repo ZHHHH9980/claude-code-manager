@@ -124,12 +124,17 @@ function clearTaskChatMessages(taskId) {
 }
 
 function deleteProject(id) {
+  const tasks = db.prepare('SELECT id FROM tasks WHERE project_id = ?').all(id);
+  for (const t of tasks) {
+    db.prepare('DELETE FROM task_chat_messages WHERE task_id = ?').run(t.id);
+  }
   db.prepare('DELETE FROM tasks WHERE project_id = ?').run(id);
   const result = db.prepare('DELETE FROM projects WHERE id = ?').run(id);
   return result.changes > 0;
 }
 
 function deleteTask(id) {
+  db.prepare('DELETE FROM task_chat_messages WHERE task_id = ?').run(id);
   const result = db.prepare('DELETE FROM tasks WHERE id = ?').run(id);
   return result.changes > 0;
 }
