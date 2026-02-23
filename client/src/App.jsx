@@ -120,11 +120,15 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (selectedProject) return;
+    if (projects.length === 0) return;
     const savedId = localStorage.getItem(STORAGE_SELECTED_PROJECT_ID);
-    if (!savedId || projects.length === 0) return;
-    if (selectedProject?.id === savedId) return;
-    const project = projects.find((p) => String(p.id) === String(savedId));
-    if (project) setSelectedProject(project);
+    if (!savedId) {
+      setSelectedProject(projects[0] || null);
+      return;
+    }
+    const restored = projects.find((p) => String(p.id) === String(savedId));
+    setSelectedProject(restored || projects[0] || null);
   }, [projects, selectedProject]);
 
   useEffect(() => {
