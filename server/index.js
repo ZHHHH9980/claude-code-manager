@@ -99,9 +99,9 @@ app.post('/api/agent', (req, res) => {
 
   const cwd = path.join(__dirname, '..');
   const escaped = message.replace(/'/g, "'\\''");
-  const cmd = `claude --print '${escaped}'`;
+  const cmd = `source ~/.bashrc 2>/dev/null; claude --print '${escaped}'`;
 
-  exec(cmd, { cwd, timeout: 120000, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+  exec(cmd, { cwd, timeout: 120000, maxBuffer: 1024 * 1024, shell: '/bin/bash' }, (err, stdout, stderr) => {
     if (err) {
       console.error('Agent error:', err.message);
       return res.json({ text: stderr || err.message, error: true });
