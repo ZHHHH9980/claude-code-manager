@@ -4,7 +4,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
 const { randomUUID } = require('crypto');
-const { execSync, exec, spawn, execFileSync } = require('child_process');
+const { execSync, exec, spawn } = require('child_process');
 const db = require('./db');
 const { syncTaskToNotion } = require('./notion-sync');
 const ptyManager = require('./pty-manager');
@@ -116,18 +116,6 @@ function logChatMetric(event, payload) {
   console.log(`[chat-metric] ${JSON.stringify({ event, ...payload })}`);
 }
 
-function captureTmuxPane(sessionName, lines = 240) {
-  try {
-    const out = execFileSync('tmux', ['capture-pane', '-p', '-t', sessionName, '-S', `-${lines}`], {
-      encoding: 'utf8',
-      maxBuffer: 1024 * 1024,
-    });
-    return String(out || '');
-  } catch {
-    return '';
-  }
-}
-
 function ensureTaskProcess(task) {
   if (!task) return null;
   const safeTaskId = String(task.id || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(-24) || 'task';
@@ -157,7 +145,7 @@ function isoNow(ts = Date.now()) {
   return new Date(ts).toISOString();
 }
 
-const TASK_CHAT_HISTORY_LIMIT = 3;
+const TASK_CHAT_HISTORY_LIMIT = 24;
 const TASK_CHAT_HISTORY_TEXT_LIMIT = 120;
 
 function compactText(input, maxLen = TASK_CHAT_HISTORY_TEXT_LIMIT) {
@@ -169,10 +157,10 @@ function compactText(input, maxLen = TASK_CHAT_HISTORY_TEXT_LIMIT) {
 function buildTaskScopedPrompt(task, project, userMessage, history = []) {
   const normalizedHistory = Array.isArray(history)
     ? history
-      .filter((entry) => entry?.role === 'user' && String(entry?.text || '').trim())
+      .filter((entry) => (entry?.role === 'user' || entry?.role === 'assistant') && String(entry?.text || '').trim())
       .slice(-TASK_CHAT_HISTORY_LIMIT)
       .map((entry) => ({
-        role: 'user',
+        role: entry.role === 'assistant' ? 'assistant' : 'user',
         text: compactText(entry.text),
       }))
     : [];
@@ -387,6 +375,7 @@ app.post('/api/agent', (req, res) => {
   );
 });
 
+const activeTaskAgents = new Map();
 app.post('/api/tasks/:id/chat', (req, res) => {
   try {
     const { id } = req.params;
@@ -414,70 +403,40 @@ app.post('/api/tasks/:id/chat', (req, res) => {
       return;
     }
 
+    const history = db.getTaskChatMessages(id, TASK_CHAT_HISTORY_LIMIT).map((entry) => ({
+      role: entry.role,
+      text: entry.text,
+    }));
     db.appendTaskChatMessage(id, 'user', message);
-    const sessionName = runtime.sessionName;
-    const baseline = captureTmuxPane(sessionName, 300);
-    let streamed = '';
-    let lastChangeAt = Date.now();
-    const startedAt = Date.now();
-    const idleMs = 1800;
-    const noOutputMs = 45000;
-    const hardTimeoutMs = 300000;
-
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache, no-transform');
-    res.setHeader('Connection', 'keep-alive');
-    if (typeof res.flushHeaders === 'function') res.flushHeaders();
-    res.write(`data: ${JSON.stringify({ ready: true })}\n\n`);
-
-    ptyManager.sendInput(sessionName, `${String(message).trim()}\n`);
-
-    const heartbeat = setInterval(() => {
-      if (!res.writableEnded) res.write(': ping\n\n');
-    }, 15000);
-
-    const poll = setInterval(() => {
-      const current = captureTmuxPane(sessionName, 300);
-      if (!current) return;
-      let appended;
-      if (current.startsWith(baseline)) appended = current.slice(baseline.length);
-      else {
-        let i = 0;
-        const max = Math.min(current.length, baseline.length);
-        while (i < max && current[i] === baseline[i]) i += 1;
-        appended = current.slice(i);
-      }
-      if (appended.length > streamed.length) {
-        const delta = appended.slice(streamed.length);
-        streamed = appended;
-        lastChangeAt = Date.now();
-        if (!res.writableEnded) res.write(`data: ${JSON.stringify({ text: delta })}\n\n`);
-      }
-      const now = Date.now();
-      const reachedIdle = streamed.length > 0 && now - lastChangeAt > idleMs;
-      const reachedNoOutput = streamed.length === 0 && now - startedAt > noOutputMs;
-      const reachedTimeout = now - startedAt > hardTimeoutMs;
-      if (reachedIdle || reachedNoOutput || reachedTimeout) {
-        clearInterval(poll);
-        clearInterval(heartbeat);
-        const finalText = streamed.trim();
-        if (finalText) db.appendTaskChatMessage(id, 'assistant', finalText);
-        if (reachedNoOutput && !finalText && !res.writableEnded) {
-          res.write(`data: ${JSON.stringify({ text: '[No visible output from task session within 45s]' })}\n\n`);
-        }
-        if (!res.writableEnded) {
-          res.write(`data: ${JSON.stringify({ done: true, code: 0, signal: null, source: 'tmux' })}\n\n`);
-          res.end();
-        }
-      }
-    }, 350);
-
-    res.on('close', () => {
-      clearInterval(poll);
-      clearInterval(heartbeat);
-      const finalText = streamed.trim();
-      if (finalText) db.appendTaskChatMessage(id, 'assistant', finalText);
-    });
+    const scopedMessage = buildTaskScopedPrompt(task, project, message, history);
+    const prev = activeTaskAgents.get(id);
+    if (prev) {
+      try { prev.kill('SIGTERM'); } catch {}
+      activeTaskAgents.delete(id);
+    }
+    let assistantOutput = '';
+    startClaudeStream(
+      {
+        cwd: runtime.cwd || path.join(__dirname, '..'),
+        message: scopedMessage,
+        scope: 'task_chat',
+        taskId: id,
+        onProcess: (child) => {
+          activeTaskAgents.set(id, child);
+          child.stdout.on('data', (chunk) => {
+            assistantOutput += chunk.toString();
+          });
+          child.stderr.on('data', (chunk) => {
+            assistantOutput += chunk.toString();
+          });
+          child.on('close', () => {
+            if (assistantOutput.trim()) db.appendTaskChatMessage(id, 'assistant', assistantOutput);
+            if (activeTaskAgents.get(id) === child) activeTaskAgents.delete(id);
+          });
+        },
+      },
+      res
+    );
   } catch (err) {
     if (res.writableEnded) return;
     res.status(500).json({ error: err?.message || 'task chat failed' });
@@ -499,7 +458,7 @@ function selfDeploy() {
   deploying = true;
   return new Promise((resolve, reject) => {
     const nvm = 'export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && nvm use 22 2>/dev/null;';
-    const cmd = `${nvm} cd ${ROOT_DIR} && git checkout -- . && git pull origin main && npm install && cd client && npm install && npm run build && cd .. && npm rebuild`;
+    const cmd = `${nvm} cd ${ROOT_DIR} && git fetch origin && git checkout main && git reset --hard origin/main && git clean -fd && npm install && npm install node-pty@1.0.0 --save-exact --build-from-source && cd client && npm install && npm run build && cd ..`;
     exec(cmd, { timeout: 120000 }, (err, stdout, stderr) => {
       deploying = false;
       if (err) return reject(err);
