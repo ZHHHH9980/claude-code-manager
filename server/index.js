@@ -661,6 +661,12 @@ io.on('connection', (socket) => {
     if (currentSession) ptyManager.sendInput(currentSession, data);
   });
 
+  socket.on('terminal:resize', ({ cols, rows }) => {
+    if (currentSession && cols > 0 && rows > 0) {
+      ptyManager.resizeSession(currentSession, cols, rows);
+    }
+  });
+
   socket.on('disconnect', () => {
     if (currentSession) {
       const entry = ptyManager.sessions.get(currentSession);

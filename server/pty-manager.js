@@ -46,6 +46,11 @@ function attachSession(sessionName) {
   return entry;
 }
 
+function resizeSession(sessionName, cols, rows) {
+  const entry = sessions.get(sessionName);
+  if (entry) entry.ptyProcess.resize(cols, rows);
+}
+
 function sendInput(sessionName, data) {
   const entry = sessions.get(sessionName);
   if (entry) entry.ptyProcess.write(data);
@@ -79,6 +84,7 @@ module.exports = {
   ensureSession,
   sessionExists,
   sendInput,
+  resizeSession,
   killSession,
   getTmuxAttachCmd,
   listAliveSessions,

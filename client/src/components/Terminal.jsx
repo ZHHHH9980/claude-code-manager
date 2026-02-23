@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { Unicode11Addon } from '@xterm/addon-unicode11';
 import '@xterm/xterm/css/xterm.css';
 
 export function Terminal({ socket, sessionName }) {
@@ -22,12 +23,22 @@ export function Terminal({ socket, sessionName }) {
       cursorBlink: true,
     });
     const fitAddon = new FitAddon();
+    const unicode11Addon = new Unicode11Addon();
     term.loadAddon(fitAddon);
+    term.loadAddon(unicode11Addon);
+    term.unicode.activeVersion = '11';
     term.open(container);
     fitAddon.fit();
     term.focus();
 
+    // Sync terminal size to server after fit
+    const syncSize = () => {
+      socket.emit('terminal:resize', { cols: term.cols, rows: term.rows });
+    };
+
     socket.emit('terminal:attach', sessionName);
+    syncSize();
+
     const onTerminalData = (data) => term.write(data);
     const onTerminalError = (msg) => term.writeln(`\r\n[terminal error] ${msg}`);
     socket.on('terminal:data', onTerminalData);
@@ -36,7 +47,10 @@ export function Terminal({ socket, sessionName }) {
     const focusHandler = () => term.focus();
     container.addEventListener('mousedown', focusHandler);
 
-    const observer = new ResizeObserver(() => fitAddon.fit());
+    const observer = new ResizeObserver(() => {
+      fitAddon.fit();
+      syncSize();
+    });
     observer.observe(container);
 
     return () => {
@@ -49,5 +63,5 @@ export function Terminal({ socket, sessionName }) {
     };
   }, [socket, sessionName]);
 
-  return <div ref={containerRef} className="w-full h-full terminal-host" />;
+  return <div ref={containerRef} className="w-full h-full terminal-host" style={{ overflow: 'hidden' }} />;
 }
