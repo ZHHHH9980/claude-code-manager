@@ -92,9 +92,6 @@ app.post('/api/tasks/:id/stop', (req, res) => {
   res.json({ ok: true });
 });
 
-// Recovery
-function recoverSessions() {
-
 // Self-deploy: git pull + build + restart
 const ROOT_DIR = path.join(__dirname, '..');
 let deploying = false;
@@ -107,7 +104,6 @@ function selfDeploy() {
     exec(cmd, { timeout: 120000 }, (err, stdout, stderr) => {
       deploying = false;
       if (err) return reject(err);
-      // Restart self via pm2 after response is sent
       setTimeout(() => {
         exec('pm2 restart claude-manager', () => {});
       }, 500);
