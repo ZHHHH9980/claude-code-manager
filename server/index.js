@@ -99,11 +99,15 @@ app.post('/api/agent', (req, res) => {
 
   const cwd = path.join(__dirname, '..');
   const escaped = message.replace(/'/g, "'\\''");
-  const cmd = `source ~/.bashrc 2>/dev/null; claude --print '${escaped}'`;
+  const cmd = `claude --print '${escaped}' < /dev/null`;
 
-  exec(cmd, { cwd, timeout: 120000, maxBuffer: 1024 * 1024, shell: '/bin/bash' }, (err, stdout, stderr) => {
+  const env = { ...process.env };
+  // Ensure Anthropic env vars are set (may not be in pm2 context)
+  if (!env.ANTHROPIC_BASE_URL) env.ANTHROPIC_BASE_URL = 'https://crs.itssx.com/api';
+
+  exec(cmd, { cwd, timeout: 120000, maxBuffer: 1024 * 1024, env }, (err, stdout, stderr) => {
     if (err) {
-      console.error('Agent error:', err.message);
+      console.error('Agent error:', err.message, stderr);
       return res.json({ text: stderr || err.message, error: true });
     }
     res.json({ text: stdout });
