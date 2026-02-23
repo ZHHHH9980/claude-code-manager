@@ -37,8 +37,8 @@ function attachSession(sessionName) {
   }
   const ptyProcess = pty.spawn('tmux', ['attach-session', '-t', sessionName], {
     name: 'xterm-256color',
-    cols: 220,
-    rows: 50,
+    cols: 120,
+    rows: 30,
     cwd: process.env.HOME,
   });
   const entry = { ptyProcess, clients: new Set() };
