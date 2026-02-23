@@ -3,9 +3,12 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
+const { execSync } = require('child_process');
 const notion = require('./notion');
 const ptyManager = require('./pty-manager');
 const { watchProgress, unwatchProgress } = require('./file-watcher');
+
+const WORKFLOW_DIR = process.env.WORKFLOW_DIR || path.join(process.env.HOME, 'Documents/claude-workflow');
 
 const app = express();
 const server = http.createServer(app);
@@ -39,14 +42,25 @@ app.post('/api/tasks', async (req, res) => {
 
 app.post('/api/tasks/:id/start', async (req, res) => {
   const { id } = req.params;
-  const { worktreePath, branch, model } = req.body;
+  const { worktreePath, branch, model, mode } = req.body;
   const sessionName = `claude-${branch.replace(/\//g, '-')}`;
 
   await notion.updateTask(id, { status: 'in_progress', worktreePath, tmuxSession: sessionName });
 
+  // Initialize claude-workflow in worktree if not already done
+  try {
+    execSync(`${WORKFLOW_DIR}/install.sh init`, { cwd: worktreePath, stdio: 'ignore' });
+  } catch (e) {
+    console.log('Workflow init skipped or already done');
+  }
+
   ptyManager.createSession(sessionName, worktreePath);
   setTimeout(() => {
-    ptyManager.sendInput(sessionName, `claude --model ${model || 'claude-sonnet-4-5'}\n`);
+    if (mode === 'ralph') {
+      ptyManager.sendInput(sessionName, `./ralph.sh --tool claude\n`);
+    } else {
+      ptyManager.sendInput(sessionName, `claude --model ${model || 'claude-sonnet-4-5'}\n`);
+    }
   }, 500);
 
   watchProgress(worktreePath, id);

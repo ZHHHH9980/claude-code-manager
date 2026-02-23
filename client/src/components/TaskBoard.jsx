@@ -26,12 +26,20 @@ export function TaskBoard({ tasks, onOpenTerminal, onStartTask }) {
               </button>
             )}
             {task.status === 'pending' && (
-              <button
-                onClick={() => onStartTask(task)}
-                className="text-xs bg-green-700 hover:bg-green-600 text-white px-2 py-1 rounded"
-              >
-                Start
-              </button>
+              <div className="flex gap-1">
+                <button
+                  onClick={() => onStartTask(task, 'claude')}
+                  className="text-xs bg-green-700 hover:bg-green-600 text-white px-2 py-1 rounded"
+                >
+                  Claude
+                </button>
+                <button
+                  onClick={() => onStartTask(task, 'ralph')}
+                  className="text-xs bg-purple-700 hover:bg-purple-600 text-white px-2 py-1 rounded"
+                >
+                  Ralph
+                </button>
+              </div>
             )}
           </div>
         ))}

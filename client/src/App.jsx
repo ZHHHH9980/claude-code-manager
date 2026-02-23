@@ -22,7 +22,7 @@ export default function App() {
       .then(r => r.json()).then(setTasks);
   }, [selectedProject]);
 
-  async function handleStartTask(task) {
+  async function handleStartTask(task, mode) {
     const res = await fetch(`/api/tasks/${task.id}/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -30,6 +30,7 @@ export default function App() {
         worktreePath: task.worktreePath || selectedProject.repoPath,
         branch: task.branch || 'main',
         model: task.model,
+        mode: mode || 'claude',
       }),
     });
     const { sessionName, tmuxCmd } = await res.json();
