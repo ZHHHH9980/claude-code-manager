@@ -1,18 +1,40 @@
-export function ProjectList({ projects, selectedId, onSelect }) {
+export function ProjectList({ projects, selectedId, onSelect, mobile = false }) {
   return (
-    <div className="w-48 border-r border-gray-700 p-3 flex flex-col gap-1">
-      <div className="text-xs text-gray-400 uppercase mb-2">Projects</div>
-      {projects.map(p => (
-        <button
-          key={p.id}
-          onClick={() => onSelect(p)}
-          className={`text-left px-2 py-1 rounded text-sm ${
-            selectedId === p.id ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-700'
-          }`}
-        >
-          {p.name}
-        </button>
-      ))}
-    </div>
+    <aside className={`w-full ${mobile ? 'h-full' : 'md:w-64'} border-b md:border-b-0 md:border-r p-3 md:p-4 flex flex-col`} style={{ borderColor: 'var(--border)' }}>
+      <div className="text-[11px] uppercase tracking-[0.16em] mb-3" style={{ color: 'var(--text-3)' }}>Projects</div>
+      <div className={`flex-1 overflow-y-auto space-y-2 pr-1 ${mobile ? 'max-h-none' : 'max-h-40 md:max-h-none'}`}>
+        {projects.length === 0 && (
+          <div className="text-xs" style={{ color: 'var(--text-3)' }}>No projects yet</div>
+        )}
+        {projects.map((p) => {
+          const selected = selectedId === p.id;
+          return (
+            <button
+              key={p.id}
+              onClick={() => onSelect(p)}
+              className="w-full text-left px-3 py-2 rounded-xl text-sm border transition"
+              style={selected
+                ? {
+                    borderColor: 'var(--accent-2)',
+                    background: 'color-mix(in srgb, var(--accent-2) 20%, var(--surface-2))',
+                    color: 'var(--text-1)',
+                  }
+                : {
+                    borderColor: 'var(--border)',
+                    background: 'var(--surface-2)',
+                    color: 'var(--text-2)',
+                  }}
+            >
+              <div className="font-medium truncate">{p.name}</div>
+              {p.repo_path && (
+                <div className="text-[11px] mt-1 truncate" style={{ color: 'var(--text-3)' }}>
+                  {p.repo_path}
+                </div>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </aside>
   );
 }

@@ -2,4 +2,167 @@
 @tailwind components;
 @tailwind utilities;
 
-body { margin: 0; }
+:root {
+  color-scheme: light;
+  --font-sans: 'Space Grotesk', 'Avenir Next', 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', 'SFMono-Regular', 'Menlo', monospace;
+
+  --bg-0: #f8f5ef;
+  --bg-1: #f2ece0;
+  --surface-1: #fffdf8cc;
+  --surface-2: #ffffffeb;
+  --surface-3: #f5efe4;
+  --border: #d8cfbf;
+  --text-1: #2d271f;
+  --text-2: #594d3f;
+  --text-3: #7c6f60;
+  --accent: #d1683d;
+  --accent-2: #2f8f83;
+  --ok: #3b8c61;
+  --warn: #cb8e32;
+  --danger: #bc4b4b;
+  --shadow: 0 20px 45px rgba(55, 45, 33, 0.14);
+  --terminal-bg: #12110f;
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
+  --bg-0: #14120f;
+  --bg-1: #1b1815;
+  --surface-1: #1d1a16cc;
+  --surface-2: #211d19eb;
+  --surface-3: #2b2620;
+  --border: #3c342b;
+  --text-1: #f2e9dc;
+  --text-2: #c8bba9;
+  --text-3: #a29482;
+  --accent: #e07a4f;
+  --accent-2: #5cb9ac;
+  --ok: #66bb89;
+  --warn: #d9a25c;
+  --danger: #de7676;
+  --shadow: 0 20px 45px rgba(0, 0, 0, 0.45);
+  --terminal-bg: #100f0d;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  color: var(--text-1);
+  background:
+    radial-gradient(circle at 12% 14%, color-mix(in srgb, var(--accent-2) 23%, transparent) 0, transparent 32%),
+    radial-gradient(circle at 88% 20%, color-mix(in srgb, var(--accent) 20%, transparent) 0, transparent 34%),
+    linear-gradient(155deg, var(--bg-0), var(--bg-1));
+  min-height: 100vh;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.ccm-shell {
+  min-height: 100vh;
+  min-height: 100dvh;
+  color: var(--text-1);
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+
+.ccm-panel {
+  backdrop-filter: blur(8px);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+}
+
+.ccm-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 10px;
+  color: var(--text-2);
+  background: color-mix(in srgb, var(--surface-2) 78%, transparent);
+}
+
+.ccm-button {
+  border-radius: 10px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-weight: 600;
+  transition: all 0.18s ease;
+}
+
+.ccm-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ccm-button-accent {
+  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 70%, #fff 30%));
+  color: #fff;
+}
+
+.ccm-button-accent:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+}
+
+.ccm-button-soft {
+  border-color: var(--border);
+  background: var(--surface-3);
+  color: var(--text-1);
+}
+
+.ccm-button-soft:hover {
+  background: color-mix(in srgb, var(--surface-3) 74%, var(--accent-2) 26%);
+}
+
+.ccm-input {
+  width: 100%;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface-2) 85%, transparent);
+  color: var(--text-1);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 14px;
+  outline: none;
+}
+
+.ccm-input::placeholder {
+  color: var(--text-3);
+}
+
+.ccm-input:focus {
+  border-color: var(--accent-2);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-2) 26%, transparent);
+}
+
+.chat-bubble {
+  max-width: min(90%, 760px);
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.chat-bubble-user {
+  margin-left: auto;
+  background: color-mix(in srgb, var(--accent-2) 22%, var(--surface-2));
+}
+
+.chat-bubble-assistant {
+  margin-right: auto;
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-2));
+}
+
+.terminal-host {
+  background: var(--terminal-bg);
+  touch-action: pan-x pan-y;
+}

@@ -45,6 +45,9 @@ cp .env.example .env
 cd client && npm run dev &   # Frontend on :5173
 npm run dev                   # Server on :3000
 
+# UI mobile guard (optional, in another terminal)
+npm run ui:mobile:watch
+
 # Production build
 npm run build
 npm run dev
@@ -100,3 +103,9 @@ chmod +x deploy.sh
 - **Server**: Express, socket.io, node-pty, better-sqlite3
 - **Client**: React, xterm.js, Tailwind CSS, Vite
 - **Infra**: tmux, pm2, GitHub webhook auto-deploy
+
+## Mobile UI Adaptation Guard
+
+- `npm run ui:mobile:watch`: watch `client/src` and auto-run mobile checks after UI edits
+- `npm run ui:mobile:check`: one-shot check (`mobile:check` + frontend build)
+- `client/scripts/mobile-check.mjs` scans UI code for mobile risk patterns (fixed large size, `100vh`)
