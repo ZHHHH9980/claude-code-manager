@@ -16,6 +16,18 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
 const activeTaskAgents = new Map();
+const taskChatLocks = new Map();
+
+function runTaskChatLocked(taskId, runner) {
+  const prev = taskChatLocks.get(taskId) || Promise.resolve();
+  const next = prev
+    .catch(() => {})
+    .then(() => runner());
+  taskChatLocks.set(taskId, next);
+  return next.finally(() => {
+    if (taskChatLocks.get(taskId) === next) taskChatLocks.delete(taskId);
+  });
+}
 
 app.use(express.json());
 
@@ -503,47 +515,56 @@ app.post('/api/tasks/:id/chat', (req, res) => {
     if (!hasSession) db.updateTask(id, { chatSessionId });
     db.appendTaskChatMessage(id, 'user', message);
     const scopedMessage = buildTaskSessionPrompt(task, project, message, !hasSession);
-    const inFlight = activeTaskAgents.get(id);
-    if (inFlight) {
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache, no-transform');
-      res.setHeader('Connection', 'keep-alive');
-      if (typeof res.flushHeaders === 'function') res.flushHeaders();
-      res.write(`data: ${JSON.stringify({ ready: true })}\n\n`);
-      res.write(`data: ${JSON.stringify({
-        error: true,
-        error_code: 'TASK_CHAT_BUSY',
-        text: 'task chat already running; wait for current response before sending next message',
-        done: true,
-      })}\n\n`);
-      res.end();
-      return;
-    }
-    let assistantOutput = '';
-    startClaudeStream(
-      {
-        cwd: runtime.cwd || path.join(__dirname, '..'),
-        message: scopedMessage,
-        scope: 'task_chat',
-        taskId: id,
-        sessionId: chatSessionId,
-        resumeSession: hasSession,
-        onProcess: (child) => {
-          activeTaskAgents.set(id, child);
-          child.stdout.on('data', (chunk) => {
-            assistantOutput += chunk.toString();
-          });
-          child.stderr.on('data', (chunk) => {
-            assistantOutput += chunk.toString();
-          });
-          child.on('close', () => {
-            if (assistantOutput.trim()) db.appendTaskChatMessage(id, 'assistant', assistantOutput);
-            if (activeTaskAgents.get(id) === child) activeTaskAgents.delete(id);
-          });
+    runTaskChatLocked(id, () => new Promise((resolve) => {
+      if (res.writableEnded || res.destroyed) {
+        resolve();
+        return;
+      }
+      let assistantOutput = '';
+      const child = startClaudeStream(
+        {
+          cwd: runtime.cwd || path.join(__dirname, '..'),
+          message: scopedMessage,
+          scope: 'task_chat',
+          taskId: id,
+          sessionId: chatSessionId,
+          resumeSession: hasSession,
+          onProcess: (proc) => {
+            activeTaskAgents.set(id, proc);
+            proc.stdout.on('data', (chunk) => {
+              assistantOutput += chunk.toString();
+            });
+            proc.stderr.on('data', (chunk) => {
+              assistantOutput += chunk.toString();
+            });
+            proc.on('close', () => {
+              if (assistantOutput.trim()) db.appendTaskChatMessage(id, 'assistant', assistantOutput);
+              if (activeTaskAgents.get(id) === proc) activeTaskAgents.delete(id);
+            });
+          },
         },
-      },
-      res
-    );
+        res
+      );
+      const done = () => resolve();
+      child.on('close', done);
+      res.on('close', done);
+    })).catch((err) => {
+      if (!res.writableEnded) {
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache, no-transform');
+        res.setHeader('Connection', 'keep-alive');
+        if (typeof res.flushHeaders === 'function') res.flushHeaders();
+        res.write(`data: ${JSON.stringify({ ready: true })}\n\n`);
+        res.write(`data: ${JSON.stringify({
+          error: true,
+          error_code: 'TASK_CHAT_QUEUE_ERROR',
+          text: err?.message || 'task chat queue failed',
+          done: true,
+        })}\n\n`);
+        res.end();
+      }
+    });
+    return;
   } catch (err) {
     if (res.writableEnded) return;
     res.status(500).json({ error: err?.message || 'task chat failed' });
