@@ -15,6 +15,7 @@ const WORKFLOW_DIR = process.env.WORKFLOW_DIR || path.join(process.env.HOME, 'Do
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
+const activeTaskAgents = new Map();
 
 app.use(express.json());
 
@@ -133,7 +134,13 @@ app.delete('/api/tasks/:id/chat/history', (req, res) => {
   const { id } = req.params;
   const task = db.getTask(id);
   if (!task) return res.status(404).json({ error: 'task not found' });
+  const inFlight = activeTaskAgents.get(id);
+  if (inFlight) {
+    try { inFlight.kill('SIGTERM'); } catch {}
+    activeTaskAgents.delete(id);
+  }
   db.clearTaskChatMessages(id);
+  db.updateTask(id, { chatSessionId: null });
   res.json({ ok: true });
 });
 
@@ -231,6 +238,34 @@ function buildTaskScopedPrompt(task, project, userMessage, history = []) {
   return lines.join('\n');
 }
 
+function buildTaskSessionPrompt(task, project, userMessage, bootstrap = false) {
+  const lines = [];
+  if (bootstrap) {
+    lines.push(
+      'You are in Task Session Chat. Strict scope rules:',
+      '1) Only discuss and act on the current task shown below.',
+      '2) Do NOT query/list/summarize other tasks unless explicitly requested.',
+      '3) Keep answers concise and action-oriented.',
+      '',
+      'Current task context:',
+      `- task_id: ${task?.id || ''}`,
+      `- title: ${task?.title || ''}`,
+      `- status: ${task?.status || ''}`,
+      `- branch: ${task?.branch || ''}`,
+      `- project_name: ${project?.name || ''}`,
+      '',
+    );
+  } else {
+    lines.push(
+      `Task scope reminder: task_id=${task?.id || ''}, title="${task?.title || ''}", branch="${task?.branch || ''}", project="${project?.name || ''}".`,
+      'Continue in the same task-scoped conversation context.',
+      '',
+    );
+  }
+  lines.push('Current user message:', compactText(userMessage, 1200));
+  return lines.join('\n');
+}
+
 function isTaskStatusQuery(message) {
   const text = String(message || '').toLowerCase().trim();
   if (!text) return false;
@@ -269,7 +304,7 @@ function buildTaskStatusReply(task, project, hasActiveProcess) {
   ].join('\n');
 }
 
-function startClaudeStream({ cwd, message, onProcess, scope, taskId = null }, res) {
+function startClaudeStream({ cwd, message, onProcess, scope, taskId = null, sessionId = null, resumeSession = false }, res) {
   const requestId = randomUUID();
   const startedAtMs = Date.now();
   let firstTokenAtMs = null;
@@ -315,6 +350,10 @@ function startClaudeStream({ cwd, message, onProcess, scope, taskId = null }, re
   if (!env.ANTHROPIC_BASE_URL) env.ANTHROPIC_BASE_URL = 'https://crs.itssx.com/api';
 
   const args = ['--print', '--allowedTools', 'Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep'];
+  if (sessionId) {
+    if (resumeSession) args.push('--resume', sessionId);
+    else args.push('--session-id', sessionId);
+  }
   const child = spawn('claude', args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
   if (onProcess) onProcess(child);
   child.stdin.write(`${message}\n`);
@@ -432,7 +471,6 @@ app.post('/api/agent', (req, res) => {
   );
 });
 
-const activeTaskAgents = new Map();
 app.post('/api/tasks/:id/chat', (req, res) => {
   try {
     const { id } = req.params;
@@ -460,12 +498,11 @@ app.post('/api/tasks/:id/chat', (req, res) => {
       return;
     }
 
-    const history = db.getTaskChatMessages(id, TASK_CHAT_HISTORY_LIMIT).map((entry) => ({
-      role: entry.role,
-      text: entry.text,
-    }));
+    const hasSession = Boolean(task.chat_session_id);
+    const chatSessionId = task.chat_session_id || randomUUID();
+    if (!hasSession) db.updateTask(id, { chatSessionId });
     db.appendTaskChatMessage(id, 'user', message);
-    const scopedMessage = buildTaskScopedPrompt(task, project, message, history);
+    const scopedMessage = buildTaskSessionPrompt(task, project, message, !hasSession);
     const inFlight = activeTaskAgents.get(id);
     if (inFlight) {
       res.setHeader('Content-Type', 'text/event-stream');
@@ -489,6 +526,8 @@ app.post('/api/tasks/:id/chat', (req, res) => {
         message: scopedMessage,
         scope: 'task_chat',
         taskId: id,
+        sessionId: chatSessionId,
+        resumeSession: hasSession,
         onProcess: (child) => {
           activeTaskAgents.set(id, child);
           child.stdout.on('data', (chunk) => {

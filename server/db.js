@@ -46,6 +46,16 @@ db.exec(`
   );
 `);
 
+function ensureTaskSchema() {
+  const cols = db.prepare("PRAGMA table_info('tasks')").all();
+  const names = new Set(cols.map((c) => c.name));
+  if (!names.has('chat_session_id')) {
+    db.exec('ALTER TABLE tasks ADD COLUMN chat_session_id TEXT');
+  }
+}
+
+ensureTaskSchema();
+
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
