@@ -49,6 +49,11 @@
   box-sizing: border-box;
 }
 
+html,
+body {
+  height: 100%;
+}
+
 body {
   margin: 0;
   font-family: var(--font-sans);
@@ -57,16 +62,17 @@ body {
     radial-gradient(circle at 12% 14%, color-mix(in srgb, var(--accent-2) 23%, transparent) 0, transparent 32%),
     radial-gradient(circle at 88% 20%, color-mix(in srgb, var(--accent) 20%, transparent) 0, transparent 34%),
     linear-gradient(155deg, var(--bg-0), var(--bg-1));
-  min-height: 100vh;
+  overflow: hidden;
 }
 
 #root {
-  min-height: 100vh;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .ccm-shell {
-  min-height: 100vh;
-  min-height: 100dvh;
+  height: 100dvh;
   color: var(--text-1);
   padding-bottom: env(safe-area-inset-bottom, 0);
 }
@@ -170,6 +176,16 @@ body {
 .ccm-x-sender .ant-sender-input,
 .ccm-x-sender textarea {
   color: var(--text-1) !important;
+}
+
+.ccm-x-sender,
+.ccm-x-sender .ant-sender,
+.ccm-x-sender .ant-sender-content {
+  min-height: 44px !important;
+}
+
+.ccm-x-sender textarea {
+  min-height: 24px !important;
 }
 
 .ccm-x-sender textarea::placeholder {

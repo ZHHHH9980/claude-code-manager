@@ -54,7 +54,7 @@ export function ChatWindow({
   };
 
   return (
-    <div className={`flex flex-col border-t h-full ${className}`} style={{ borderColor: 'var(--border)' }}>
+    <div className={`flex flex-col border-t h-full min-h-0 overflow-hidden ${className}`} style={{ borderColor: 'var(--border)' }}>
       <div className="px-4 py-2 text-xs border-b flex items-center justify-between" style={{ borderColor: 'var(--border)', color: 'var(--text-3)' }}>
         <span>{title}</span>
         <div className="flex items-center gap-2">
@@ -78,7 +78,7 @@ export function ChatWindow({
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto px-3 md:px-4 py-3">
+      <div className="flex-1 min-h-0 overflow-y-auto px-3 md:px-4 py-3">
         {messages.length === 0 && (
           <div className="text-xs" style={{ color: 'var(--text-3)' }}>
             No messages yet.
@@ -96,14 +96,11 @@ export function ChatWindow({
         <div ref={endRef} />
       </div>
 
-      <div className="px-3 py-3 border-t" style={{ borderColor: 'var(--border)' }}>
+      <div className="px-3 py-3 border-t shrink-0" style={{ borderColor: 'var(--border)' }}>
         <Sender
           value={inputValue}
           onChange={(nextValue) => onInputChange(nextValue)}
-          onSubmit={(nextValue) => {
-            onInputChange(nextValue);
-            onSubmit?.({ preventDefault() {} });
-          }}
+          onSubmit={(nextValue) => onSubmit?.(undefined, nextValue)}
           placeholder={placeholder}
           submitType="enter"
           loading={loading}
@@ -116,9 +113,13 @@ export function ChatWindow({
               background: 'color-mix(in srgb, var(--surface-2) 90%, transparent)',
               border: '1px solid var(--border)',
               borderRadius: 12,
+              minHeight: 52,
             },
+            content: { minHeight: 40 },
             input: {
               color: 'var(--text-1)',
+              minHeight: 24,
+              lineHeight: '22px',
             },
           }}
         />
