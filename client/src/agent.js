@@ -41,7 +41,7 @@ export async function chat(messages, apiKey) {
     const res = await fetch('https://api.poe.com/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-      body: JSON.stringify({ model: 'claude-3.5-sonnet', messages: m, tools: TOOLS }),
+      body: JSON.stringify({ model: 'GPT-4o', messages: m, tools: TOOLS, tool_choice: 'auto' }),
     });
     if (!res.ok) throw new Error(`Poe API ${res.status}: ${await res.text()}`);
     return res.json();
