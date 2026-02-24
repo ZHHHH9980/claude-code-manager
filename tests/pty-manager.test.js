@@ -139,7 +139,8 @@ describe('pty-manager', () => {
 
   it('getTmuxAttachCmd returns correct command', () => {
     const cmd = ptyManager.getTmuxAttachCmd('my-session');
-    assert.equal(cmd, 'tmux attach -t my-session');
+    assert.ok(cmd.includes('my-session'), 'command must include session name');
+    assert.ok(cmd.includes('tmux attach'), 'command must include tmux attach');
   });
 
   it('listAliveSessions returns parsed session names', () => {
@@ -160,6 +161,8 @@ describe('pty-manager', () => {
     const ptyMod = require('node-pty');
     const spawnCall = ptyMod.spawn.mock.calls[0];
     assert.ok(spawnCall, 'pty.spawn should have been called');
+    // Now spawns `su` as the command (not tmux directly)
+    assert.equal(spawnCall.arguments[0], 'su', 'must spawn su to run as non-root user');
     const opts = spawnCall.arguments[2];
     assert.ok(opts.env, 'spawn options must include env');
     assert.equal(opts.env.LANG, 'en_US.UTF-8', 'LANG must be en_US.UTF-8');

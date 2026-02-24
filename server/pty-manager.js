@@ -4,9 +4,16 @@ const { execSync } = require('child_process');
 
 const sessions = new Map();
 
+// Task sessions run as this non-root user so --dangerously-skip-permissions works
+const TASK_USER = process.env.TASK_USER || 'ccm';
+
+function asUser(cmd) {
+  return `su - ${TASK_USER} -c ${JSON.stringify(cmd)}`;
+}
+
 function tmuxSessionExists(name) {
   try {
-    execSync(`tmux has-session -t ${name} 2>/dev/null`);
+    execSync(asUser(`tmux has-session -t ${name} 2>/dev/null`));
     return true;
   } catch {
     return false;
@@ -17,7 +24,7 @@ function createSession(sessionName, cwd) {
   if (tmuxSessionExists(sessionName)) {
     throw new Error(`tmux session ${sessionName} already exists`);
   }
-  execSync(`LANG=en_US.UTF-8 tmux new-session -d -s ${sessionName} -c "${cwd}"`);
+  execSync(asUser(`LANG=en_US.UTF-8 tmux new-session -d -s ${sessionName} -c "${cwd}"`));
   return attachSession(sessionName);
 }
 
@@ -36,7 +43,8 @@ function attachSession(sessionName) {
   if (sessions.has(sessionName)) {
     return sessions.get(sessionName);
   }
-  const ptyProcess = pty.spawn('tmux', ['attach-session', '-t', sessionName], {
+  // Spawn as TASK_USER so --dangerously-skip-permissions is allowed
+  const ptyProcess = pty.spawn('su', ['-', TASK_USER, '-c', `tmux attach-session -t ${sessionName}`], {
     name: 'xterm-256color',
     cols: 120,
     rows: 30,
@@ -59,7 +67,7 @@ function sendInput(sessionName, data) {
 }
 
 function killSession(sessionName) {
-  try { execSync(`tmux kill-session -t ${sessionName}`); } catch {}
+  try { execSync(asUser(`tmux kill-session -t ${sessionName}`)); } catch {}
   const entry = sessions.get(sessionName);
   if (entry) {
     entry.ptyProcess.kill();
@@ -68,12 +76,12 @@ function killSession(sessionName) {
 }
 
 function getTmuxAttachCmd(sessionName) {
-  return `tmux attach -t ${sessionName}`;
+  return `su - ${TASK_USER} -c "tmux attach -t ${sessionName}"`;
 }
 
 function listAliveSessions() {
   try {
-    const out = execSync('tmux list-sessions -F "#{session_name}"').toString();
+    const out = execSync(asUser('tmux list-sessions -F "#{session_name}"')).toString();
     return out.trim().split('\n').filter(Boolean);
   } catch {
     return [];
