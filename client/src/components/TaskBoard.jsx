@@ -1,3 +1,5 @@
+import { useState } from 'react';
+
 const STATUS_STYLE = {
   pending: { color: 'var(--warn)', label: 'pending' },
   in_progress: { color: 'var(--accent-2)', label: 'in progress' },
@@ -10,13 +12,51 @@ function statusStyle(status) {
   return STATUS_STYLE[status] || { color: 'var(--text-3)', label: status || 'unknown' };
 }
 
-export function TaskBoard({ tasks, onOpenTerminal, onStartTask, onDeleteTask, mobile = false }) {
+export function TaskBoard({ tasks, onOpenTerminal, onStartTask, onDeleteTask, onCreateTask, mobile = false }) {
+  const [showForm, setShowForm] = useState(false);
+  const [newTitle, setNewTitle] = useState('');
+
+  function handleSubmit(e) {
+    e.preventDefault();
+    const title = newTitle.trim();
+    if (!title || !onCreateTask) return;
+    onCreateTask({ title });
+    setNewTitle('');
+    setShowForm(false);
+  }
+
   return (
     <section className="flex-1 p-3 md:p-4 overflow-y-auto">
       <div className="mb-3 flex items-center justify-between">
         <div className="text-[11px] uppercase tracking-[0.16em]" style={{ color: 'var(--text-3)' }}>Tasks</div>
-        <div className="text-xs" style={{ color: 'var(--text-3)' }}>{tasks.length} total</div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs" style={{ color: 'var(--text-3)' }}>{tasks.length} total</span>
+          {onCreateTask && (
+            <button
+              onClick={() => setShowForm(!showForm)}
+              className="ccm-button ccm-button-accent text-xs px-2 py-1"
+            >
+              {showForm ? '×' : '+'}
+            </button>
+          )}
+        </div>
       </div>
+
+      {showForm && (
+        <form onSubmit={handleSubmit} className="mb-3 flex gap-2">
+          <input
+            autoFocus
+            value={newTitle}
+            onChange={(e) => setNewTitle(e.target.value)}
+            placeholder="Task title..."
+            className="flex-1 text-sm px-3 py-2 rounded-lg border outline-none"
+            style={{ borderColor: 'var(--border)', background: 'var(--surface-2)', color: 'var(--text-1)' }}
+          />
+          <button type="submit" className="ccm-button ccm-button-accent text-xs px-3 py-2">
+            Create
+          </button>
+        </form>
+      )}
 
       <div className="space-y-2.5">
         {tasks.length === 0 && (

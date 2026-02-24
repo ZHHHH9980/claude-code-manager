@@ -218,6 +218,16 @@ export default function App() {
     refreshAll();
   }
 
+  async function handleCreateTask({ title }) {
+    if (!selectedProject || !title) return;
+    await fetch('/api/tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, projectId: selectedProject.id, branch: 'main' }),
+    });
+    refreshAll();
+  }
+
   function stopMainChat() {
     if (!chatAbortRef.current) return;
     chatAbortRef.current.abort();
@@ -405,7 +415,7 @@ export default function App() {
                 <ProjectList projects={projects} selectedId={selectedProject?.id} onSelect={setSelectedProject} mobile />
               )}
               {mobilePane === 'tasks' && (
-                <TaskBoard tasks={tasks} onOpenTerminal={handleOpenTask} onStartTask={handleStartTask} onDeleteTask={handleDeleteTask} mobile />
+                <TaskBoard tasks={tasks} onOpenTerminal={handleOpenTask} onStartTask={handleStartTask} onDeleteTask={handleDeleteTask} onCreateTask={handleCreateTask} mobile />
               )}
               {mobilePane === 'chat' && mainChatPanel}
             </div>
@@ -414,7 +424,7 @@ export default function App() {
           <>
             <ProjectList projects={projects} selectedId={selectedProject?.id} onSelect={setSelectedProject} />
             <div className="flex flex-col flex-1 min-w-0 min-h-0">
-              <TaskBoard tasks={tasks} onOpenTerminal={handleOpenTask} onStartTask={handleStartTask} onDeleteTask={handleDeleteTask} />
+              <TaskBoard tasks={tasks} onOpenTerminal={handleOpenTask} onStartTask={handleStartTask} onDeleteTask={handleDeleteTask} onCreateTask={handleCreateTask} />
               {mainChatPanel}
             </div>
           </>
