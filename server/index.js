@@ -724,8 +724,9 @@ io.on('connection', (socket) => {
     // Force SIGWINCH by toggling size — triggers a full redraw from the terminal app.
     const { cols, rows } = entry.ptyProcess;
     if (cols > 1 && rows > 1) {
-      entry.ptyProcess.resize(cols - 1, rows);
-      setTimeout(() => entry.ptyProcess.resize(cols, rows), 50);
+      // Keep tmux internal size in sync while triggering SIGWINCH.
+      ptyManager.resizeSession(sessionName, cols - 1, rows);
+      setTimeout(() => ptyManager.resizeSession(sessionName, cols, rows), 50);
     }
   });
 

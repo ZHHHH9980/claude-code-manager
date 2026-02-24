@@ -1,6 +1,6 @@
 // Task-terminal critical module — changes gated by pre-commit smoke tests
 const pty = require('node-pty');
-const { execSync } = require('child_process');
+const cp = require('child_process');
 
 const sessions = new Map();
 
@@ -14,7 +14,7 @@ function asUser(cmd) {
 
 function tmuxSessionExists(name) {
   try {
-    execSync(asUser(`tmux has-session -t ${name} 2>/dev/null`));
+    cp.execSync(asUser(`tmux has-session -t ${name} 2>/dev/null`));
     return true;
   } catch {
     return false;
@@ -25,11 +25,11 @@ function createSession(sessionName, cwd) {
   if (tmuxSessionExists(sessionName)) {
     throw new Error(`tmux session ${sessionName} already exists`);
   }
-  execSync(asUser(`LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 LC_CTYPE=en_US.UTF-8 tmux -u new-session -d -s ${sessionName} -c "${cwd}"`));
+  cp.execSync(asUser(`LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 LC_CTYPE=en_US.UTF-8 tmux -u new-session -d -s ${sessionName} -c "${cwd}"`));
   // tmux may reuse an existing server process; force locale on this session explicitly.
-  try { execSync(asUser(`tmux set-environment -t ${sessionName} LANG en_US.UTF-8`)); } catch {}
-  try { execSync(asUser(`tmux set-environment -t ${sessionName} LC_ALL en_US.UTF-8`)); } catch {}
-  try { execSync(asUser(`tmux set-environment -t ${sessionName} LC_CTYPE en_US.UTF-8`)); } catch {}
+  try { cp.execSync(asUser(`tmux set-environment -t ${sessionName} LANG en_US.UTF-8`)); } catch {}
+  try { cp.execSync(asUser(`tmux set-environment -t ${sessionName} LC_ALL en_US.UTF-8`)); } catch {}
+  try { cp.execSync(asUser(`tmux set-environment -t ${sessionName} LC_CTYPE en_US.UTF-8`)); } catch {}
   return attachSession(sessionName);
 }
 
@@ -66,6 +66,11 @@ function attachSession(sessionName) {
 function resizeSession(sessionName, cols, rows) {
   const entry = sessions.get(sessionName);
   if (entry) entry.ptyProcess.resize(cols, rows);
+  // Also resize the tmux window so tmux's internal size matches the PTY.
+  // Without this, tmux still sends ESC[<old_rows>d for the status bar, causing scroll.
+  try {
+    cp.execSync(asUser(`tmux resize-window -t ${sessionName} -x ${cols} -y ${rows}`));
+  } catch {}
 }
 
 function sendInput(sessionName, data) {
@@ -74,7 +79,7 @@ function sendInput(sessionName, data) {
 }
 
 function killSession(sessionName) {
-  try { execSync(asUser(`tmux kill-session -t ${sessionName}`)); } catch {}
+  try { cp.execSync(asUser(`tmux kill-session -t ${sessionName}`)); } catch {}
   const entry = sessions.get(sessionName);
   if (entry) {
     entry.ptyProcess.kill();
@@ -88,7 +93,7 @@ function getTmuxAttachCmd(sessionName) {
 
 function listAliveSessions() {
   try {
-    const out = execSync(asUser('tmux list-sessions -F "#{session_name}"')).toString();
+    const out = cp.execSync(asUser('tmux list-sessions -F "#{session_name}"')).toString();
     return out.trim().split('\n').filter(Boolean);
   } catch {
     return [];
