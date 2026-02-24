@@ -153,7 +153,7 @@ export function AssistantChatWindow({
           if (event.done) {
             sawDoneEvent = true;
             if (event.error) throw new Error(fromEventError(event));
-            if (event.signal || (typeof event.code === 'number' && event.code !== 0)) {
+            if (!event.degraded && (event.signal || (typeof event.code === 'number' && event.code !== 0))) {
               throw new Error(`agent exited unexpectedly (code=${event.code ?? 'null'}, signal=${event.signal ?? 'null'})`);
             }
             setPhase('idle');
