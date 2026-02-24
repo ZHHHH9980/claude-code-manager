@@ -140,7 +140,7 @@ describe('pty-manager', () => {
   it('getTmuxAttachCmd returns correct command', () => {
     const cmd = ptyManager.getTmuxAttachCmd('my-session');
     assert.ok(cmd.includes('my-session'), 'command must include session name');
-    assert.ok(cmd.includes('tmux attach'), 'command must include tmux attach');
+    assert.ok(/tmux(?: -u)? attach/.test(cmd), 'command must include tmux attach');
   });
 
   it('listAliveSessions returns parsed session names', () => {

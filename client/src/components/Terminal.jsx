@@ -11,6 +11,7 @@ function safeFit(fitAddon) {
 export function Terminal({ socket, sessionName }) {
   const containerRef = useRef(null);
   const lastSizeRef = useRef({ cols: 0, rows: 0 });
+  const resizeTimerRef = useRef(null);
 
   useEffect(() => {
     if (!socket || !sessionName || !containerRef.current) return;
@@ -44,6 +45,22 @@ export function Terminal({ socket, sessionName }) {
       socket.emit('terminal:resize', { cols, rows });
     };
 
+    const scheduleSyncSize = (force = false) => {
+      if (force) {
+        if (resizeTimerRef.current) {
+          clearTimeout(resizeTimerRef.current);
+          resizeTimerRef.current = null;
+        }
+        syncSize(true);
+        return;
+      }
+      if (resizeTimerRef.current) return;
+      resizeTimerRef.current = setTimeout(() => {
+        resizeTimerRef.current = null;
+        syncSize();
+      }, 90);
+    };
+
     // Set up listeners BEFORE attaching so we don't miss initial data
     const onTerminalData = (data) => term.write(data);
     const onTerminalError = (msg) => term.writeln(`\r\n[terminal error] ${msg}`);
@@ -54,12 +71,12 @@ export function Terminal({ socket, sessionName }) {
     // This ensures tmux redraws at the right size (prevents status-bar row mismatch).
     safeFit(fitAddon);
     socket.emit('terminal:attach', { sessionName, cols: term.cols, rows: term.rows });
-    syncSize(true);
+    scheduleSyncSize(true);
 
     // Focus after a short delay (container may not be fully visible yet)
     const initTimer = setTimeout(() => {
       safeFit(fitAddon);
-      syncSize();
+      scheduleSyncSize();
       term.focus();
     }, 200);
 
@@ -69,12 +86,16 @@ export function Terminal({ socket, sessionName }) {
 
     const observer = new ResizeObserver(() => {
       safeFit(fitAddon);
-      syncSize();
+      scheduleSyncSize();
     });
     observer.observe(container);
 
     return () => {
       clearTimeout(initTimer);
+      if (resizeTimerRef.current) {
+        clearTimeout(resizeTimerRef.current);
+        resizeTimerRef.current = null;
+      }
       inputDisposable.dispose();
       term.dispose();
       observer.disconnect();
