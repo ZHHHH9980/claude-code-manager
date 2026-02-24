@@ -93,7 +93,7 @@ app.post('/api/tasks/:id/start', (req, res) => {
           if (mode === 'ralph') {
             ptyManager.sendInput(sessionName, './ralph.sh --tool claude\n');
           } else {
-            ptyManager.sendInput(sessionName, `claude --model ${model || 'claude-sonnet-4-5'}\n`);
+            ptyManager.sendInput(sessionName, `claude --model ${model || 'claude-sonnet-4-5'} --dangerously-skip-permissions\n`);
           }
         } catch (err) {
           console.warn(`tmux sendInput failed for task ${id}:`, err?.message || err);
@@ -182,7 +182,7 @@ function ensureTaskProcess(task, opts = {}) {
         setTimeout(() => {
           try {
             if (task.mode === 'ralph') ptyManager.sendInput(sessionName, './ralph.sh --tool claude\n');
-            else ptyManager.sendInput(sessionName, `claude --model ${task.model || 'claude-sonnet-4-5'}\n`);
+            else ptyManager.sendInput(sessionName, `claude --model ${task.model || 'claude-sonnet-4-5'} --dangerously-skip-permissions\n`);
           } catch (err) {
             console.warn(`tmux sendInput failed for task ${task.id}:`, err?.message || err);
           }
