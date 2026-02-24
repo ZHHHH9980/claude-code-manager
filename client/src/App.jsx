@@ -283,6 +283,7 @@ export default function App() {
           try {
             const event = JSON.parse(dataLines.join('\n'));
             if (event.ready) continue;
+            if (event.stderr) continue;
             if (event.text) {
               setChatDiag((prev) => updateDiagOnChunk(prev || createDiagStart()));
               setChatMessages((prev) => {

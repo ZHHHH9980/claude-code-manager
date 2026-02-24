@@ -136,6 +136,7 @@ export function AssistantChatWindow({
 
           if (event.ready) continue;
           if (event.error) throw new Error(fromEventError(event));
+          if (event.stderr) continue;
 
           if (event.text) {
             setPhase('streaming');

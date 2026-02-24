@@ -36,7 +36,6 @@ class TaskChatRuntime {
 
     const args = [
       '--print',
-      '--verbose',
       '--input-format', 'stream-json',
       '--output-format', 'stream-json',
       '--allowedTools', 'Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep',
