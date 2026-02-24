@@ -1,79 +1,11 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { ProjectList } from './components/ProjectList';
 import { TaskBoard } from './components/TaskBoard';
-import { AssistantChatWindow } from './components/AssistantChatWindow';
 import { Terminal } from './components/Terminal';
 import { useSocket } from './hooks/useSocket';
 
 const STORAGE_SELECTED_PROJECT_ID = 'ccm-selected-project-id';
 const STORAGE_ACTIVE_TASK_ID = 'ccm-active-task-id';
-
-function createDiagStart() {
-  return {
-    phase: 'sending',
-    startedAt: Date.now(),
-    firstTokenAt: null,
-    lastTokenAt: null,
-    endedAt: null,
-    chunks: 0,
-    error: null,
-  };
-}
-
-function updateDiagOnChunk(diag) {
-  const now = Date.now();
-  return {
-    ...diag,
-    phase: diag.firstTokenAt ? 'streaming' : 'first_token',
-    firstTokenAt: diag.firstTokenAt || now,
-    lastTokenAt: now,
-    chunks: (diag.chunks || 0) + 1,
-  };
-}
-
-function finalizeDiag(diag, phase, error = null) {
-  return {
-    ...diag,
-    phase,
-    endedAt: Date.now(),
-    error,
-  };
-}
-
-function renderDiag(diag, nowTs) {
-  if (!diag) {
-    return { phase: 'idle', elapsedSec: 0, firstTokenSec: null, lastGapSec: null, chunks: 0, hint: '' };
-  }
-  const endTs = diag.endedAt || nowTs;
-  const elapsedMs = Math.max(0, endTs - (diag.startedAt || endTs));
-  const firstTokenSec = diag.firstTokenAt ? Math.round((diag.firstTokenAt - diag.startedAt) / 100) / 10 : null;
-  const lastGapSec = diag.lastTokenAt ? Math.round((Math.max(0, nowTs - diag.lastTokenAt)) / 100) / 10 : null;
-  let hint = '';
-  if ((diag.phase === 'sending' || diag.phase === 'first_token') && !diag.firstTokenAt && elapsedMs > 8000) {
-    hint = 'waiting first token: likely model queue/network/upstream latency';
-  } else if (diag.phase === 'streaming' && lastGapSec != null && lastGapSec > 8) {
-    hint = 'stream gap > 8s: possible model reasoning stall or network jitter';
-  } else if (diag.phase === 'error') {
-    hint = diag.error || 'request failed';
-  }
-  return {
-    phase: diag.phase,
-    elapsedSec: Math.round(elapsedMs / 100) / 10,
-    firstTokenSec,
-    lastGapSec,
-    chunks: diag.chunks || 0,
-    hint,
-  };
-}
-
-function buildStatusText(diag) {
-  if (!diag) return 'Thinking...';
-  if (diag.phase === 'sending') return 'Sending...';
-  if (diag.phase === 'first_token') return 'Waiting first token...';
-  if (diag.phase === 'streaming') return 'Streaming...';
-  if (diag.phase === 'error') return 'Error';
-  return 'Thinking...';
-}
 
 export default function App() {
   const [projects, setProjects] = useState([]);
@@ -85,15 +17,8 @@ export default function App() {
   const [activeTaskTitle, setActiveTaskTitle] = useState('');
 
   const { socket } = useSocket();
-
-  const [chatInput, setChatInput] = useState('');
-  const [chatMessages, setChatMessages] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [chatDiag, setChatDiag] = useState(null);
-  const chatEndRef = useRef(null);
-  const chatAbortRef = useRef(null);
-
-  const [nowTs, setNowTs] = useState(Date.now());
+  const [agentTerminalSession, setAgentTerminalSession] = useState(null);
+  const [agentTerminalReady, setAgentTerminalReady] = useState(false);
 
   const [theme, setTheme] = useState(() => {
     const saved = localStorage.getItem('ccm-theme');
@@ -107,11 +32,6 @@ export default function App() {
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem('ccm-theme', theme);
   }, [theme]);
-
-  useEffect(() => {
-    const timer = setInterval(() => setNowTs(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, []);
 
   useEffect(() => {
     fetch('/api/projects').then((r) => r.json()).then(setProjects);
@@ -228,99 +148,20 @@ export default function App() {
     refreshAll();
   }
 
-  function stopMainChat() {
-    if (!chatAbortRef.current) return;
-    chatAbortRef.current.abort();
-    setChatDiag((prev) => finalizeDiag(prev || createDiagStart(), 'error', 'Stopped by user'));
+  async function startMainAgentTerminal() {
+    setAgentTerminalReady(false);
+    try {
+      const res = await fetch('/api/agent/terminal/start', { method: 'POST' });
+      const payload = await res.json();
+      if (payload?.sessionName) setAgentTerminalSession(payload.sessionName);
+    } catch {}
+    setAgentTerminalReady(true);
   }
 
-  async function handleMainChatSubmit(e, directMessage) {
-    if (e?.preventDefault) e.preventDefault();
-    const userMsg = String(directMessage ?? chatInput).trim();
-    if (!userMsg || loading) return;
-    setChatInput('');
-    setChatMessages((prev) => [...prev, { role: 'user', text: userMsg }, { role: 'assistant', text: '' }]);
-    setLoading(true);
-    setChatDiag(createDiagStart());
-
-    try {
-      const controller = new AbortController();
-      chatAbortRef.current = controller;
-
-      const res = await fetch('/api/agent', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: userMsg }),
-        signal: controller.signal,
-      });
-
-      if (!res.ok) {
-        const errText = await res.text();
-        throw new Error(errText || `HTTP ${res.status}`);
-      }
-      if (!res.body) throw new Error('No response body');
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        const chunks = buffer.split('\n\n');
-        buffer = chunks.pop() || '';
-
-        for (const chunk of chunks) {
-          if (!chunk || chunk.startsWith(':')) continue;
-          const dataLines = chunk
-            .split('\n')
-            .filter((line) => line.startsWith('data: '))
-            .map((line) => line.slice(6));
-          if (dataLines.length === 0) continue;
-
-          try {
-            const event = JSON.parse(dataLines.join('\n'));
-            if (event.ready) continue;
-            if (event.text) {
-              setChatDiag((prev) => updateDiagOnChunk(prev || createDiagStart()));
-              setChatMessages((prev) => {
-                const updated = [...prev];
-                const last = updated[updated.length - 1];
-                if (last?.role === 'assistant') last.text += event.text;
-                return updated;
-              });
-            }
-            if (event.done) {
-              setChatDiag((prev) => finalizeDiag(prev || createDiagStart(), 'done'));
-              refreshAll();
-            }
-          } catch {
-            // ignore malformed chunks
-          }
-        }
-      }
-      refreshAll();
-    } catch (err) {
-      setChatDiag((prev) => finalizeDiag(prev || createDiagStart(), 'error', err?.message || 'request failed'));
-      setChatMessages((prev) => {
-        const updated = [...prev];
-        const last = updated[updated.length - 1];
-        const text = `Error: ${err?.message || 'request failed'}`;
-        if (last?.role === 'assistant') last.text = text;
-        else updated.push({ role: 'assistant', text });
-        return updated;
-      });
-    } finally {
-      chatAbortRef.current = null;
-      setLoading(false);
-      setChatDiag((prev) => {
-        if (!prev) return prev;
-        if (prev.phase === 'done' || prev.phase === 'error') return prev;
-        return finalizeDiag(prev, 'done');
-      });
-    }
+  async function restartMainAgentTerminal() {
+    setAgentTerminalReady(false);
+    try { await fetch('/api/agent/terminal/stop', { method: 'POST' }); } catch {}
+    await startMainAgentTerminal();
   }
 
   useEffect(() => {
@@ -332,9 +173,7 @@ export default function App() {
   }, [tasks, activeSession, activeTaskId, tasksLoaded]);
 
   useEffect(() => {
-    return () => {
-      if (chatAbortRef.current) chatAbortRef.current.abort();
-    };
+    startMainAgentTerminal();
   }, []);
 
   useEffect(() => {
@@ -353,14 +192,29 @@ export default function App() {
   }, [isMobile, selectedProject, mobilePane]);
 
   const mainChatPanel = (
-    <div style={{ minHeight: isMobile ? '0' : '250px', height: isMobile ? '100%' : '40%' }}>
-      <AssistantChatWindow
-        title="CCM Agent Chat"
-        endpoint="/api/agent"
-        placeholder="Tell CCM what to do..."
-        assistantLabel="CCM"
-        onAfterDone={refreshAll}
-      />
+    <div className="flex flex-col border-t h-full min-h-0 overflow-hidden" style={{ borderColor: 'var(--border)', minHeight: isMobile ? '0' : '250px', height: isMobile ? '100%' : '40%' }}>
+      <div className="px-4 py-2 text-xs border-b flex items-center justify-between" style={{ borderColor: 'var(--border)', color: 'var(--text-3)' }}>
+        <div className="flex items-center gap-2 min-w-0">
+          <span
+            aria-hidden
+            className="inline-flex items-center justify-center w-5 h-5 rounded-md text-[10px] font-semibold shrink-0"
+            style={{ background: '#d97757', color: '#fff' }}
+          >
+            CC
+          </span>
+          <span className="truncate">CCM Agent Terminal</span>
+        </div>
+        <button type="button" onClick={restartMainAgentTerminal} className="ccm-button ccm-button-soft text-xs px-2 py-0.5">Restart</button>
+      </div>
+      <div className="flex-1 min-h-0">
+        {agentTerminalReady && agentTerminalSession && socket ? (
+          <Terminal socket={socket} sessionName={agentTerminalSession} />
+        ) : (
+          <div className="h-full w-full flex items-center justify-center text-xs" style={{ color: 'var(--text-3)' }}>
+            Starting agent terminal...
+          </div>
+        )}
+      </div>
     </div>
   );
 
