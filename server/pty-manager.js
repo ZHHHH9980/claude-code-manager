@@ -30,6 +30,9 @@ function createSession(sessionName, cwd) {
   try { cp.execSync(asUser(`tmux set-environment -t ${sessionName} LANG en_US.UTF-8`)); } catch {}
   try { cp.execSync(asUser(`tmux set-environment -t ${sessionName} LC_ALL en_US.UTF-8`)); } catch {}
   try { cp.execSync(asUser(`tmux set-environment -t ${sessionName} LC_CTYPE en_US.UTF-8`)); } catch {}
+  // Community-reported fix for embedded terminals: disable status redraw to avoid periodic row duplication.
+  try { cp.execSync(asUser(`tmux set-option -t ${sessionName} status off`)); } catch {}
+  try { cp.execSync(asUser(`tmux set-option -t ${sessionName} status-interval 0`)); } catch {}
   return attachSession(sessionName);
 }
 
