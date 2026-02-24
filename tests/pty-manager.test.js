@@ -25,12 +25,16 @@ function loadFreshPtyManager() {
     exports: {
       spawn: mock.fn((cmd, args, opts) => {
         let onExitCb = null;
+        let onDataCb = null;
         const proc = {
           pid: spawned.length + 1000,
           cols: 120,
           rows: 30,
           killed: false,
-          onData: mock.fn(() => ({ dispose: mock.fn() })),
+          onData: mock.fn((cb) => {
+            onDataCb = cb;
+            return { dispose: mock.fn(() => { onDataCb = null; }) };
+          }),
           onExit: mock.fn((cb) => {
             onExitCb = cb;
             return { dispose: mock.fn(() => { onExitCb = null; }) };
@@ -41,6 +45,9 @@ function loadFreshPtyManager() {
             this.killed = true;
             if (onExitCb) onExitCb({ exitCode: 0, signal: 15 });
           }),
+          _emitData(data) {
+            if (onDataCb) onDataCb(data);
+          },
           _emitExit(evt = { exitCode: 0, signal: 0 }) {
             if (onExitCb) onExitCb(evt);
           },
@@ -143,6 +150,22 @@ describe('pty-manager', () => {
     assert.equal(ptyManager.sessionExists('auto-exit'), true);
     spawned[0].proc._emitExit({ exitCode: 0, signal: 0 });
     assert.equal(ptyManager.sessionExists('auto-exit'), false);
+  });
+
+  it('buffers output and replays it to newly attached client', () => {
+    ptyManager.ensureSession('replay', '/tmp');
+    spawned[0].proc._emitData('hello\r\n');
+    spawned[0].proc._emitData('world\r\n');
+    assert.equal(ptyManager.getBufferedOutput('replay').includes('hello'), true);
+    assert.equal(ptyManager.getBufferedOutput('replay').includes('world'), true);
+  });
+
+  it('broadcasts live output to attached clients', () => {
+    const entry = ptyManager.ensureSession('live', '/tmp');
+    const payloads = [];
+    entry.clients.add({ emit: (evt, text) => payloads.push({ evt, text }) });
+    spawned[0].proc._emitData('line-1');
+    assert.deepEqual(payloads, [{ evt: 'terminal:data', text: 'line-1' }]);
   });
 });
 

@@ -673,18 +673,12 @@ function recoverSessions() {
 // WebSocket
 io.on('connection', (socket) => {
   let currentSession = null;
-  let onDataDisposable = null;
-  let terminalDecoder = null;
 
-  function disposeTerminalSubscription() {
-    if (onDataDisposable) {
-      try { onDataDisposable.dispose(); } catch {}
-      onDataDisposable = null;
-    }
-    if (!terminalDecoder) return;
-    const tail = terminalDecoder.end();
-    terminalDecoder = null;
-    if (tail) socket.emit('terminal:data', tail);
+  function detachFromCurrentSession() {
+    if (!currentSession) return;
+    const prev = ptyManager.sessions.get(currentSession);
+    if (prev) prev.clients.delete(socket);
+    currentSession = null;
   }
 
   socket.on('terminal:attach', (payload) => {
@@ -693,27 +687,16 @@ io.on('connection', (socket) => {
     const initCols = typeof payload === 'object' && payload?.cols > 0 ? payload.cols : null;
     const initRows = typeof payload === 'object' && payload?.rows > 0 ? payload.rows : null;
 
-    // Clean up previous listener if re-attaching.
-    disposeTerminalSubscription();
+    detachFromCurrentSession();
     currentSession = sessionName;
     let entry = ptyManager.sessions.get(sessionName);
-    // After server restart the in-memory map is empty but the tmux session may still exist.
-    // Re-attach the pty so the client can reconnect without losing the running session.
     if (!entry && ptyManager.sessionExists(sessionName)) {
       try { entry = ptyManager.attachSession(sessionName); } catch {}
     }
     if (!entry) return socket.emit('terminal:error', 'Session not found');
     entry.clients.add(socket);
-    terminalDecoder = new StringDecoder('utf8');
-    onDataDisposable = entry.ptyProcess.onData((data) => {
-      if (data == null) return;
-      if (Buffer.isBuffer(data)) {
-        const decoded = terminalDecoder.write(data);
-        if (decoded) socket.emit('terminal:data', decoded);
-        return;
-      }
-      socket.emit('terminal:data', String(data));
-    });
+    const replay = ptyManager.getBufferedOutput(sessionName);
+    if (replay) socket.emit('terminal:data', replay);
 
     // If client sent its dimensions, resize PTY to match BEFORE SIGWINCH so tmux
     // redraws at the correct size (prevents status-bar row mismatch and missing content).
@@ -741,11 +724,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    disposeTerminalSubscription();
-    if (currentSession) {
-      const entry = ptyManager.sessions.get(currentSession);
-      if (entry) entry.clients.delete(socket);
-    }
+    detachFromCurrentSession();
   });
 });
 

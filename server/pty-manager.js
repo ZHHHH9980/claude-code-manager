@@ -1,7 +1,9 @@
 // Task-terminal critical module — changes gated by pre-commit smoke tests
 const pty = require('node-pty');
+const { StringDecoder } = require('string_decoder');
 
 const sessions = new Map();
+const MAX_OUTPUT_BUFFER = Number(process.env.PTY_OUTPUT_BUFFER_MAX || 300000);
 
 // Task sessions run as this non-root user so --dangerously-skip-permissions works
 const TASK_USER = process.env.TASK_USER || 'ccm';
@@ -14,6 +16,20 @@ function removeSession(sessionName) {
   const entry = sessions.get(sessionName);
   if (!entry) return;
   entry.closed = true;
+  try { entry.dataDisposable?.dispose?.(); } catch {}
+  entry.dataDisposable = null;
+  try {
+    const tail = entry.outputDecoder?.end?.();
+    if (tail) {
+      entry.outputBuffer += tail;
+      if (entry.outputBuffer.length > MAX_OUTPUT_BUFFER) {
+        entry.outputBuffer = entry.outputBuffer.slice(-MAX_OUTPUT_BUFFER);
+      }
+    }
+  } catch {}
+  entry.outputDecoder = null;
+  try { entry.exitDisposable?.dispose?.(); } catch {}
+  entry.exitDisposable = null;
   sessions.delete(sessionName);
 }
 
@@ -45,8 +61,23 @@ function createSession(sessionName, cwd) {
     lastCols: ptyProcess.cols,
     lastRows: ptyProcess.rows,
     closed: false,
+    outputBuffer: '',
+    outputDecoder: new StringDecoder('utf8'),
+    dataDisposable: null,
     exitDisposable: null,
   };
+  entry.dataDisposable = ptyProcess.onData((data) => {
+    if (entry.closed || data == null) return;
+    const text = Buffer.isBuffer(data) ? entry.outputDecoder.write(data) : String(data);
+    if (!text) return;
+    entry.outputBuffer += text;
+    if (entry.outputBuffer.length > MAX_OUTPUT_BUFFER) {
+      entry.outputBuffer = entry.outputBuffer.slice(-MAX_OUTPUT_BUFFER);
+    }
+    for (const socket of entry.clients) {
+      try { socket.emit('terminal:data', text); } catch {}
+    }
+  });
   entry.exitDisposable = ptyProcess.onExit(() => removeSession(sessionName));
   sessions.set(sessionName, entry);
   return entry;
@@ -89,6 +120,8 @@ function sendInput(sessionName, data) {
 function killSession(sessionName) {
   const entry = sessions.get(sessionName);
   if (!entry) return;
+  try { entry.dataDisposable?.dispose?.(); } catch {}
+  entry.dataDisposable = null;
   try { entry.exitDisposable?.dispose?.(); } catch {}
   entry.exitDisposable = null;
   entry.closed = true;
@@ -106,6 +139,12 @@ function listAliveSessions() {
     .map(([sessionName]) => sessionName);
 }
 
+function getBufferedOutput(sessionName) {
+  const entry = sessions.get(sessionName);
+  if (!isAlive(entry)) return '';
+  return entry.outputBuffer || '';
+}
+
 module.exports = {
   createSession,
   attachSession,
@@ -116,5 +155,6 @@ module.exports = {
   killSession,
   getTmuxAttachCmd,
   listAliveSessions,
+  getBufferedOutput,
   sessions,
 };
