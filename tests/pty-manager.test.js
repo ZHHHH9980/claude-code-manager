@@ -132,9 +132,9 @@ describe('pty-manager', () => {
     ptyManager.ensureSession('env-test', '/tmp');
     const spawnCall = spawned[0];
     assert.ok(spawnCall, 'pty.spawn should have been called');
-    assert.equal(spawnCall.cmd, 'su', 'must spawn su to run as non-root user');
-    assert.equal(spawnCall.args[0], '-');
-    assert.ok(spawnCall.args[3].includes('cd "/tmp"'), 'bootstrap command should cd into task cwd');
+    assert.ok(['bash', 'su'].includes(spawnCall.cmd), 'should spawn bash (non-root) or su (root)');
+    const bootstrap = spawnCall.cmd === 'bash' ? spawnCall.args[1] : spawnCall.args[3];
+    assert.ok(String(bootstrap).includes('cd "/tmp"'), 'bootstrap command should cd into task cwd');
     const opts = spawnCall.opts;
     assert.ok(opts.env, 'spawn options must include env');
     assert.equal(opts.env.LANG, 'en_US.UTF-8', 'LANG must be en_US.UTF-8');

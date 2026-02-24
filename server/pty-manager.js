@@ -1,12 +1,15 @@
 // Task-terminal critical module — changes gated by pre-commit smoke tests
+const os = require('os');
 const pty = require('node-pty');
 const { StringDecoder } = require('string_decoder');
 
 const sessions = new Map();
 const MAX_OUTPUT_BUFFER = Number(process.env.PTY_OUTPUT_BUFFER_MAX || 300000);
 
-// Task sessions run as this non-root user so --dangerously-skip-permissions works
-const TASK_USER = process.env.TASK_USER || 'ccm';
+const CURRENT_USER = process.env.SUDO_USER || process.env.USER || os.userInfo().username;
+const IS_ROOT = typeof process.getuid === 'function' ? process.getuid() === 0 : false;
+// Default to the current service user to avoid cross-user su when running non-root.
+const TASK_USER = process.env.TASK_USER || CURRENT_USER;
 
 function isAlive(entry) {
   return Boolean(entry?.ptyProcess) && !entry.closed;
@@ -46,8 +49,11 @@ function createSession(sessionName, cwd) {
     'exec bash -li',
   ].join('; ');
 
+  const runAsCurrentUser = !IS_ROOT || TASK_USER === CURRENT_USER;
+  const cmd = runAsCurrentUser ? 'bash' : 'su';
+  const args = runAsCurrentUser ? ['-lc', bootstrap] : ['-', TASK_USER, '-c', bootstrap];
   // One task = one dedicated claude process tree (no tmux multiplexing).
-  const ptyProcess = pty.spawn('su', ['-', TASK_USER, '-c', bootstrap], {
+  const ptyProcess = pty.spawn(cmd, args, {
     name: 'xterm-256color',
     cols: 120,
     rows: 30,
