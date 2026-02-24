@@ -53,6 +53,7 @@ function attachSession(sessionName) {
     cols: 120,
     rows: 30,
     cwd: process.env.HOME,
+    encoding: null,
     env: { ...process.env, LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8' },
   });
   const entry = { ptyProcess, clients: new Set() };

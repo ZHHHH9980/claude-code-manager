@@ -674,13 +674,22 @@ function recoverSessions() {
 io.on('connection', (socket) => {
   let currentSession = null;
   let onDataDisposable = null;
+  let terminalDecoder = null;
 
-  socket.on('terminal:attach', (sessionName) => {
-    // Clean up previous listener if re-attaching
+  function disposeTerminalSubscription() {
     if (onDataDisposable) {
       try { onDataDisposable.dispose(); } catch {}
       onDataDisposable = null;
     }
+    if (!terminalDecoder) return;
+    const tail = terminalDecoder.end();
+    terminalDecoder = null;
+    if (tail) socket.emit('terminal:data', tail);
+  }
+
+  socket.on('terminal:attach', (sessionName) => {
+    // Clean up previous listener if re-attaching.
+    disposeTerminalSubscription();
     currentSession = sessionName;
     let entry = ptyManager.sessions.get(sessionName);
     // After server restart the in-memory map is empty but the tmux session may still exist.
@@ -690,7 +699,16 @@ io.on('connection', (socket) => {
     }
     if (!entry) return socket.emit('terminal:error', 'Session not found');
     entry.clients.add(socket);
-    onDataDisposable = entry.ptyProcess.onData((data) => socket.emit('terminal:data', data));
+    terminalDecoder = new StringDecoder('utf8');
+    onDataDisposable = entry.ptyProcess.onData((data) => {
+      if (data == null) return;
+      if (Buffer.isBuffer(data)) {
+        const decoded = terminalDecoder.write(data);
+        if (decoded) socket.emit('terminal:data', decoded);
+        return;
+      }
+      socket.emit('terminal:data', String(data));
+    });
 
     // Force SIGWINCH by toggling size — triggers a full redraw from the terminal app.
     // capture-pane was removed: its ANSI absolute-position sequences conflict with xterm.js
@@ -713,10 +731,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    if (onDataDisposable) {
-      try { onDataDisposable.dispose(); } catch {}
-      onDataDisposable = null;
-    }
+    disposeTerminalSubscription();
     if (currentSession) {
       const entry = ptyManager.sessions.get(currentSession);
       if (entry) entry.clients.delete(socket);
