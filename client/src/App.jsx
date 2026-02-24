@@ -82,10 +82,10 @@ export default function App() {
     const savedTaskId = localStorage.getItem(STORAGE_ACTIVE_TASK_ID);
     if (!savedTaskId) return;
     const savedTask = tasks.find((task) => String(task.id) === String(savedTaskId));
-    if (!savedTask || !savedTask.tmux_session) return;
-    setActiveSession(savedTask.tmux_session);
+    if (!savedTask || !savedTask.pty_session) return;
+    setActiveSession(savedTask.pty_session);
     setActiveTaskId(savedTask.id);
-    setActiveTaskTitle(savedTask.title || savedTask.tmux_session);
+    setActiveTaskTitle(savedTask.title || savedTask.pty_session);
   }, [selectedProject, tasks, activeTaskId, tasksLoaded]);
 
   function closeActiveTaskChat() {
@@ -122,11 +122,11 @@ export default function App() {
   }
 
   function handleOpenTask(task) {
-    if (!task?.tmux_session) return;
+    if (!task?.pty_session) return;
     localStorage.setItem(STORAGE_ACTIVE_TASK_ID, String(task.id));
-    setActiveSession(task.tmux_session);
+    setActiveSession(task.pty_session);
     setActiveTaskId(task.id);
-    setActiveTaskTitle(task.title || task.tmux_session);
+    setActiveTaskTitle(task.title || task.pty_session);
   }
 
   async function handleDeleteTask(task) {

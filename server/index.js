@@ -73,7 +73,7 @@ app.post('/api/tasks/:id/start', (req, res) => {
   const task = db.updateTask(id, {
     status: 'in_progress',
     worktreePath,
-    tmuxSession: sessionName,
+    ptySession: sessionName,
   });
   syncTaskToNotion(task);
 
@@ -84,7 +84,7 @@ app.post('/api/tasks/:id/start', (req, res) => {
     console.log('Workflow init skipped or already done');
   }
 
-  let tmuxAvailable = true;
+  let ptyOk = true;
   try {
     const existed = ptyManager.sessionExists(sessionName);
     ptyManager.ensureSession(sessionName, worktreePath);
@@ -99,24 +99,24 @@ app.post('/api/tasks/:id/start', (req, res) => {
             setTimeout(() => { try { ptyManager.sendInput(sessionName, '\n'); } catch {} }, 3000);
           }
         } catch (err) {
-          console.warn(`tmux sendInput failed for task ${id}:`, err?.message || err);
+          console.warn(`pty sendInput failed for task ${id}:`, err?.message || err);
         }
       }, 500);
     }
   } catch (err) {
-    tmuxAvailable = false;
-    console.warn(`tmux unavailable for task ${id}:`, err?.message || err);
+    ptyOk = false;
+    console.warn(`pty unavailable for task ${id}:`, err?.message || err);
   }
 
   watchProgress(worktreePath, id);
-  res.json({ sessionName, tmuxCmd: ptyManager.getTmuxAttachCmd(sessionName), tmuxAvailable });
+  res.json({ sessionName, ptyOk });
 });
 
 app.post('/api/tasks/:id/stop', (req, res) => {
   const { id } = req.params;
   const task = db.getTask(id);
   taskChatRuntimeManager.stopTask(id, 'task_stop');
-  if (task?.tmux_session) ptyManager.killSession(task.tmux_session);
+  if (task?.pty_session) ptyManager.killSession(task.pty_session);
   if (task?.worktree_path) unwatchProgress(task.worktree_path);
   const updated = db.updateTask(id, { status: 'done' });
   syncTaskToNotion(updated);
@@ -138,7 +138,7 @@ app.delete('/api/tasks/:id', (req, res) => {
   const { id } = req.params;
   const task = db.getTask(id);
   taskChatRuntimeManager.stopTask(id, 'task_delete');
-  if (task?.tmux_session) ptyManager.killSession(task.tmux_session);
+  if (task?.pty_session) ptyManager.killSession(task.pty_session);
   if (task?.worktree_path) unwatchProgress(task.worktree_path);
   const ok = db.deleteTask(id);
   if (!ok) return res.status(404).json({ error: 'task not found' });
@@ -167,17 +167,17 @@ function logChatMetric(event, payload) {
 }
 
 function ensureTaskProcess(task, opts = {}) {
-  const { ensureTmux = true } = opts;
+  const { ensurePty = true } = opts;
   if (!task) return null;
   const safeTaskId = String(task.id || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(-24) || 'task';
-  const sessionName = task.tmux_session || `claude-task-${safeTaskId}`;
+  const sessionName = task.pty_session || `claude-task-${safeTaskId}`;
   let cwd = task.worktree_path;
   if (!cwd && task.project_id) {
     cwd = db.getProject(task.project_id)?.repo_path;
   }
   if (!cwd) return null;
 
-  if (ensureTmux) {
+  if (ensurePty) {
     const existed = ptyManager.sessionExists(sessionName);
     try {
       ptyManager.ensureSession(sessionName, cwd || process.env.HOME || '/');
@@ -192,16 +192,16 @@ function ensureTaskProcess(task, opts = {}) {
               setTimeout(() => { try { ptyManager.sendInput(sessionName, '\n'); } catch {} }, 3000);
             }
           } catch (err) {
-            console.warn(`tmux sendInput failed for task ${task.id}:`, err?.message || err);
+            console.warn(`pty sendInput failed for task ${task.id}:`, err?.message || err);
           }
         }, 500);
       }
     } catch (err) {
-      console.warn(`tmux ensureSession failed for task ${task.id}:`, err?.message || err);
+      console.warn(`pty ensureSession failed for task ${task.id}:`, err?.message || err);
     }
   }
-  if (task.tmux_session !== sessionName || task.status !== 'in_progress') {
-    const updated = db.updateTask(task.id, { tmuxSession: sessionName, status: 'in_progress' });
+  if (task.pty_session !== sessionName || task.status !== 'in_progress') {
+    const updated = db.updateTask(task.id, { ptySession: sessionName, status: 'in_progress' });
     syncTaskToNotion(updated);
   }
   if (cwd) watchProgress(cwd, task.id);
@@ -262,7 +262,7 @@ function buildTaskScopedPrompt(task, project, userMessage, history = []) {
     `- title: ${task?.title || ''}`,
     `- status: ${task?.status || ''}`,
     `- branch: ${task?.branch || ''}`,
-    `- tmux_session: ${task?.tmux_session || ''}`,
+    `- pty_session: ${task?.pty_session || ''}`,
     `- project_id: ${task?.project_id || ''}`,
     `- project_name: ${project?.name || ''}`,
     ...historyLines,
@@ -509,7 +509,7 @@ const AGENT_TERMINAL_SESSION = process.env.AGENT_TERMINAL_SESSION || 'claude-age
 
 function startAgentTerminalSession() {
   const cwd = path.join(__dirname, '..');
-  let tmuxAvailable = true;
+  let ptyOk = true;
   try {
     const existed = ptyManager.sessionExists(AGENT_TERMINAL_SESSION);
     ptyManager.ensureSession(AGENT_TERMINAL_SESSION, cwd);
@@ -525,13 +525,12 @@ function startAgentTerminalSession() {
       }, 500);
     }
   } catch (err) {
-    tmuxAvailable = false;
+    ptyOk = false;
     console.warn('agent terminal unavailable:', err?.message || err);
   }
   return {
     sessionName: AGENT_TERMINAL_SESSION,
-    tmuxCmd: ptyManager.getTmuxAttachCmd(AGENT_TERMINAL_SESSION),
-    tmuxAvailable,
+    ptyOk,
   };
 }
 
@@ -633,7 +632,7 @@ app.post('/api/tasks/:id/chat', (req, res) => {
 
     const task = db.getTask(id);
     if (!task) return res.status(404).json({ error: 'task not found' });
-    const runtime = ensureTaskProcess(task, { ensureTmux: false });
+    const runtime = ensureTaskProcess(task, { ensurePty: false });
     if (!runtime) return res.status(400).json({ error: 'task worktree/repo path missing' });
 
     const project = task.project_id ? db.getProject(task.project_id) : null;
@@ -709,7 +708,7 @@ app.post('/api/tasks/:id/chat', (req, res) => {
   }
 });
 
-// For terminal/tmux chat stream, keep backward compatibility path.
+// For terminal chat stream, keep backward compatibility path.
 app.post('/api/tasks/:id/stop-chat', (req, res) => {
   // keep task runtime alive until task is done/deleted; closing chat modal should not stop it.
   res.json({ ok: true });
@@ -759,14 +758,14 @@ function recoverSessions() {
   const aliveSessions = ptyManager.listAliveSessions();
   const tasks = db.getTasks();
   for (const task of tasks) {
-    if (task.status === 'in_progress' && task.tmux_session) {
-      if (aliveSessions.includes(task.tmux_session)) {
-        ptyManager.attachSession(task.tmux_session);
+    if (task.status === 'in_progress' && task.pty_session) {
+      if (aliveSessions.includes(task.pty_session)) {
+        ptyManager.attachSession(task.pty_session);
         if (task.worktree_path) watchProgress(task.worktree_path, task.id);
-        console.log(`Recovered session: ${task.tmux_session}`);
+        console.log(`Recovered session: ${task.pty_session}`);
       } else {
         db.updateTask(task.id, { status: 'interrupted' });
-        console.log(`Session dead, marked interrupted: ${task.tmux_session}`);
+        console.log(`Session dead, marked interrupted: ${task.pty_session}`);
       }
     }
   }
@@ -800,8 +799,8 @@ io.on('connection', (socket) => {
       : '';
     if (buffered) socket.emit('terminal:data', buffered);
 
-    // If client sent its dimensions, resize PTY to match BEFORE SIGWINCH so tmux
-    // redraws at the correct size (prevents status-bar row mismatch and missing content).
+    // If client sent its dimensions, resize PTY to match BEFORE SIGWINCH so the
+    // terminal app redraws at the correct size.
     if (initCols && initRows) {
       ptyManager.resizeSession(sessionName, initCols, initRows);
     }

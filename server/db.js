@@ -27,7 +27,7 @@ db.exec(`
     project_id TEXT,
     branch TEXT,
     worktree_path TEXT,
-    tmux_session TEXT,
+    pty_session TEXT,
     model TEXT DEFAULT 'claude-sonnet-4-5',
     mode TEXT DEFAULT 'claude',
     notion_id TEXT,
@@ -58,6 +58,12 @@ function ensureTaskSchema() {
   const names = new Set(cols.map((c) => c.name));
   if (!names.has('chat_session_id')) {
     db.exec('ALTER TABLE tasks ADD COLUMN chat_session_id TEXT');
+  }
+  // Migrate tmux_session -> pty_session
+  if (names.has('tmux_session') && !names.has('pty_session')) {
+    db.exec('ALTER TABLE tasks RENAME COLUMN tmux_session TO pty_session');
+  } else if (!names.has('pty_session')) {
+    db.exec('ALTER TABLE tasks ADD COLUMN pty_session TEXT');
   }
 }
 

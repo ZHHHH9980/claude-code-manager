@@ -52,7 +52,7 @@ function createSession(sessionName, cwd) {
   const runAsCurrentUser = !IS_ROOT || TASK_USER === CURRENT_USER;
   const cmd = runAsCurrentUser ? 'bash' : 'su';
   const args = runAsCurrentUser ? ['-lc', bootstrap] : ['-', TASK_USER, '-c', bootstrap];
-  // One task = one dedicated claude process tree (no tmux multiplexing).
+  // One task = one dedicated claude process tree.
   const ptyProcess = pty.spawn(cmd, args, {
     name: 'xterm-256color',
     cols: 120,
