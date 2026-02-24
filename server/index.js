@@ -655,6 +655,9 @@ io.on('connection', (socket) => {
     if (!entry) return socket.emit('terminal:error', 'Session not found');
     entry.clients.add(socket);
     entry.ptyProcess.onData((data) => socket.emit('terminal:data', data));
+    // Force tmux redraw by resizing pty to current dimensions (sends SIGWINCH)
+    const { cols, rows } = entry.ptyProcess;
+    if (cols > 0 && rows > 0) entry.ptyProcess.resize(cols, rows);
   });
 
   socket.on('terminal:input', (data) => {
