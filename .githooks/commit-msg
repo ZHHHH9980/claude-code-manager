@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+WORKFLOW_REFS="${HOME}/Documents/claude-workflow/refs"
+MSG=$(head -1 "$1")
+
+if echo "$MSG" | grep -qiE '^feat(\(|:)'; then
+  echo ""
+  echo "[commit-msg] 📋 feat commit detected:"
+  cat "$WORKFLOW_REFS/on-feat-commit.md" 2>/dev/null || echo "  - Update PROGRESS.md"
+elif echo "$MSG" | grep -qiE '^fix(\(|:)'; then
+  echo ""
+  echo "[commit-msg] 📋 fix commit detected:"
+  cat "$WORKFLOW_REFS/on-fix-commit.md" 2>/dev/null || echo "  - Update REVIEW.md"
+fi
