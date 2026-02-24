@@ -4,7 +4,9 @@
   "scripts": {
     "dev": "node server/index.js",
     "build": "cd client && npm run build",
-    "hooks:install": "git config core.hooksPath .githooks && chmod +x .githooks/post-commit",
+    "test": "node --test tests/pty-manager.test.js tests/terminal-socket.test.js",
+    "test:terminal": "node --test tests/pty-manager.test.js tests/terminal-socket.test.js",
+    "hooks:install": "git config core.hooksPath .githooks && chmod +x .githooks/pre-commit .githooks/post-commit",
     "hooks:uninstall": "git config --unset core.hooksPath || true",
     "ui:mobile:check": "npm --prefix client run mobile:build-check",
     "ui:mobile:watch": "node ./scripts/ui-mobile-watch.mjs",
@@ -23,5 +25,8 @@
     "simple-git": "^3.20.0",
     "socket.io": "^4.7.2",
     "ssh2": "^1.15.0"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.8.3"
   }
 }

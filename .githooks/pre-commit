@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Pre-commit hook: run task-terminal smoke tests when related files change.
+# Blocks commit if tests fail.
+
+# Files that form the task-terminal critical path
+TASK_TERMINAL_FILES=(
+  "server/pty-manager.js"
+  "server/index.js"
+  "client/src/components/Terminal.jsx"
+  "client/src/hooks/useSocket.js"
+)
+
+# Get staged files
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null || true)
+if [[ -z "$STAGED" ]]; then
+  exit 0
+fi
+
+NEED_TERMINAL_TESTS=false
+for pattern in "${TASK_TERMINAL_FILES[@]}"; do
+  if echo "$STAGED" | grep -qF "$pattern"; then
+    NEED_TERMINAL_TESTS=true
+    break
+  fi
+done
+
+if [[ "$NEED_TERMINAL_TESTS" == "false" ]]; then
+  exit 0
+fi
+
+echo "[pre-commit] Task-terminal files changed — running smoke tests..."
+
+# Run pty-manager unit tests
+echo "[pre-commit] → pty-manager tests"
+if ! node --test tests/pty-manager.test.js 2>&1; then
+  echo "[pre-commit] ❌ pty-manager tests FAILED. Commit blocked."
+  exit 1
+fi
+
+# Run terminal socket integration tests
+echo "[pre-commit] → terminal socket tests"
+if ! node --test tests/terminal-socket.test.js 2>&1; then
+  echo "[pre-commit] ❌ terminal socket tests FAILED. Commit blocked."
+  exit 1
+fi
+
+# Verify client builds (catches import/syntax errors in Terminal.jsx)
+echo "[pre-commit] → client build check"
+if ! (cd client && npx vite build --logLevel error 2>&1); then
+  echo "[pre-commit] ❌ client build FAILED. Commit blocked."
+  exit 1
+fi
+
+echo "[pre-commit] ✅ All task-terminal smoke tests passed."
