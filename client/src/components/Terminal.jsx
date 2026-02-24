@@ -10,6 +10,7 @@ function safeFit(fitAddon) {
 
 export function Terminal({ socket, sessionName }) {
   const containerRef = useRef(null);
+  const lastSizeRef = useRef({ cols: 0, rows: 0 });
 
   useEffect(() => {
     if (!socket || !sessionName || !containerRef.current) return;
@@ -34,8 +35,13 @@ export function Terminal({ socket, sessionName }) {
     } catch {}
     term.open(container);
 
-    const syncSize = () => {
-      socket.emit('terminal:resize', { cols: term.cols, rows: term.rows });
+    const syncSize = (force = false) => {
+      const cols = term.cols;
+      const rows = term.rows;
+      const last = lastSizeRef.current;
+      if (!force && last.cols === cols && last.rows === rows) return;
+      lastSizeRef.current = { cols, rows };
+      socket.emit('terminal:resize', { cols, rows });
     };
 
     // Set up listeners BEFORE attaching so we don't miss initial data
@@ -48,7 +54,7 @@ export function Terminal({ socket, sessionName }) {
     // This ensures tmux redraws at the right size (prevents status-bar row mismatch).
     safeFit(fitAddon);
     socket.emit('terminal:attach', { sessionName, cols: term.cols, rows: term.rows });
-    socket.emit('terminal:resize', { cols: term.cols, rows: term.rows });
+    syncSize(true);
 
     // Focus after a short delay (container may not be fully visible yet)
     const initTimer = setTimeout(() => {

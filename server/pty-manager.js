@@ -65,19 +65,29 @@ function attachSession(sessionName) {
     encoding: null,
     env: { ...process.env, LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8', LC_CTYPE: 'en_US.UTF-8' },
   });
-  const entry = { ptyProcess, clients: new Set() };
+  const entry = {
+    ptyProcess,
+    clients: new Set(),
+    lastCols: ptyProcess.cols,
+    lastRows: ptyProcess.rows,
+  };
   sessions.set(sessionName, entry);
   return entry;
 }
 
 function resizeSession(sessionName, cols, rows) {
   const entry = sessions.get(sessionName);
-  if (entry) entry.ptyProcess.resize(cols, rows);
+  if (!entry) return;
+  if (entry.lastCols === cols && entry.lastRows === rows) return;
+
+  entry.ptyProcess.resize(cols, rows);
   // Also resize the tmux window so tmux's internal size matches the PTY.
   // Without this, tmux still sends ESC[<old_rows>d for the status bar, causing scroll.
   try {
     cp.execSync(asUser(`tmux resize-window -t ${sessionName} -x ${cols} -y ${rows}`));
   } catch {}
+  entry.lastCols = cols;
+  entry.lastRows = rows;
 }
 
 function sendInput(sessionName, data) {
