@@ -62,24 +62,19 @@ function setupServer() {
     io = new Server(httpServer, { cors: { origin: '*' } });
 
     io.on('connection', (socket) => {
-      let currentSession = null;
-      let onDataDisposable = null;
+      const attachedSessions = new Set();
 
       socket.on('terminal:attach', (payload) => {
         const sessionName = typeof payload === 'string' ? payload : payload?.sessionName;
         const initCols = typeof payload === 'object' && payload?.cols > 0 ? payload.cols : null;
         const initRows = typeof payload === 'object' && payload?.rows > 0 ? payload.rows : null;
 
-        if (onDataDisposable) {
-          try { onDataDisposable.dispose(); } catch {}
-          onDataDisposable = null;
-        }
-        currentSession = sessionName;
         const entry = mockPtyManager.sessions.get(sessionName);
         if (!entry) return socket.emit('terminal:error', 'Session not found');
+        attachedSessions.add(sessionName);
         entry.clients.add(socket);
-        onDataDisposable = entry.ptyProcess.onData((data) => socket.emit(`terminal:data:${sessionName}`, data));
-        // Replay current screen content (mirrors tmux capture-pane in real server)
+        entry.ptyProcess.onData((data) => socket.emit(`terminal:data:${sessionName}`, data));
+        // Replay current screen content
         const captured = mockPtyManager.capturePane(sessionName);
         if (captured && captured.trim()) socket.emit(`terminal:data:${sessionName}`, captured);
         // Resize PTY to client dimensions BEFORE SIGWINCH
@@ -95,26 +90,21 @@ function setupServer() {
       });
 
       socket.on('terminal:input', ({ sessionName: sn, data }) => {
-        const target = sn || currentSession;
-        if (target) mockPtyManager.sendInput(target, data);
+        if (sn) mockPtyManager.sendInput(sn, data);
       });
 
       socket.on('terminal:resize', ({ sessionName: sn, cols, rows }) => {
-        const target = sn || currentSession;
-        if (target && cols > 0 && rows > 0) {
-          mockPtyManager.resizeSession(target, cols, rows);
+        if (sn && cols > 0 && rows > 0) {
+          mockPtyManager.resizeSession(sn, cols, rows);
         }
       });
 
       socket.on('disconnect', () => {
-        if (onDataDisposable) {
-          try { onDataDisposable.dispose(); } catch {}
-          onDataDisposable = null;
-        }
-        if (currentSession) {
-          const entry = mockPtyManager.sessions.get(currentSession);
+        for (const sessionName of attachedSessions) {
+          const entry = mockPtyManager.sessions.get(sessionName);
           if (entry) entry.clients.delete(socket);
         }
+        attachedSessions.clear();
       });
     });
 

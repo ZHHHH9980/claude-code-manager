@@ -773,7 +773,8 @@ function recoverSessions() {
 
 // WebSocket
 io.on('connection', (socket) => {
-  let currentSession = null;
+  // Track all sessions this socket is attached to (one socket can serve multiple Terminal components)
+  const attachedSessions = new Set();
 
   socket.on('terminal:attach', (payload) => {
     // Support legacy string and new object form {sessionName, cols, rows}
@@ -781,23 +782,20 @@ io.on('connection', (socket) => {
     const initCols = typeof payload === 'object' && payload?.cols > 0 ? payload.cols : null;
     const initRows = typeof payload === 'object' && payload?.rows > 0 ? payload.rows : null;
 
-    if (currentSession) {
-      const prev = ptyManager.sessions.get(currentSession);
-      if (prev) prev.clients.delete(socket);
-    }
-    currentSession = sessionName;
     let entry = ptyManager.sessions.get(sessionName);
     if (!entry && ptyManager.sessionExists(sessionName)) {
       try { entry = ptyManager.attachSession(sessionName); } catch {}
     }
     if (!entry) return socket.emit('terminal:error', 'Session not found');
+
+    attachedSessions.add(sessionName);
     entry.clients.add(socket);
 
     // Replay session buffer on attach so reconnect/new tab can see recent output.
     const buffered = ptyManager.getBufferedOutput
       ? ptyManager.getBufferedOutput(sessionName)
       : '';
-    if (buffered) socket.emit('terminal:data', buffered);
+    if (buffered) socket.emit(`terminal:data:${sessionName}`, buffered);
 
     // If client sent its dimensions, resize PTY to match BEFORE SIGWINCH so the
     // terminal app redraws at the correct size.
@@ -814,22 +812,21 @@ io.on('connection', (socket) => {
   });
 
   socket.on('terminal:input', ({ sessionName: sn, data }) => {
-    const target = sn || currentSession;
-    if (target) ptyManager.sendInput(target, data);
+    if (sn) ptyManager.sendInput(sn, data);
   });
 
   socket.on('terminal:resize', ({ sessionName: sn, cols, rows }) => {
-    const target = sn || currentSession;
-    if (target && cols > 0 && rows > 0) {
-      ptyManager.resizeSession(target, cols, rows);
+    if (sn && cols > 0 && rows > 0) {
+      ptyManager.resizeSession(sn, cols, rows);
     }
   });
 
   socket.on('disconnect', () => {
-    if (currentSession) {
-      const entry = ptyManager.sessions.get(currentSession);
+    for (const sessionName of attachedSessions) {
+      const entry = ptyManager.sessions.get(sessionName);
       if (entry) entry.clients.delete(socket);
     }
+    attachedSessions.clear();
   });
 });
 
