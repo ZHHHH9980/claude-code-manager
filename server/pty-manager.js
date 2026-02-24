@@ -8,7 +8,8 @@ const sessions = new Map();
 const TASK_USER = process.env.TASK_USER || 'ccm';
 
 function asUser(cmd) {
-  return `su - ${TASK_USER} -c ${JSON.stringify(cmd)}`;
+  // Source .bash_profile to ensure env vars (ANTHROPIC_*) are available
+  return `su - ${TASK_USER} -c ${JSON.stringify(`. ~/.bash_profile 2>/dev/null; ${cmd}`)}`;
 }
 
 function tmuxSessionExists(name) {
