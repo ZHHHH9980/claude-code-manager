@@ -51,6 +51,10 @@ function attachSession(sessionName) {
   if (sessions.has(sessionName)) {
     return sessions.get(sessionName);
   }
+  // Re-apply session options for recovered/legacy sessions created before the fixes.
+  try { cp.execSync(asUser(`tmux set-option -t ${sessionName} status off`)); } catch {}
+  try { cp.execSync(asUser(`tmux set-option -t ${sessionName} status-interval 0`)); } catch {}
+  try { cp.execSync(asUser(`tmux set-environment -t ${sessionName} LC_CTYPE en_US.UTF-8`)); } catch {}
   // Spawn as TASK_USER so --dangerously-skip-permissions is allowed.
   // -u forces tmux client output in UTF-8 even if locale detection is wrong.
   const ptyProcess = pty.spawn('su', ['-', TASK_USER, '-c', `tmux -u attach-session -t ${sessionName}`], {
