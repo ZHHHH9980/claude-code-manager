@@ -19,7 +19,7 @@ function syncTaskToNotion(task) {
     notion.updateTask(task.notion_id, {
       status: task.status,
       worktreePath: task.worktree_path,
-      tmuxSession: task.tmux_session,
+      ptySession: task.pty_session,
     }).catch(err => console.error('[notion-sync] update error:', err.message));
   } else {
     notion.createTask(data)

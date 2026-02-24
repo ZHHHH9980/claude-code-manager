@@ -68,7 +68,6 @@ export function Terminal({ socket, sessionName }) {
     socket.on('terminal:error', onTerminalError);
 
     // Fit to container first so we send correct dimensions with attach.
-    // This ensures tmux redraws at the right size (prevents status-bar row mismatch).
     safeFit(fitAddon);
     socket.emit('terminal:attach', { sessionName, cols: term.cols, rows: term.rows });
     scheduleSyncSize(true);

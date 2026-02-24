@@ -28,7 +28,7 @@ async function getTasks(projectId) {
     status: t.properties.Status?.select?.name ?? 'pending',
     worktreePath: t.properties['Worktree Path']?.rich_text?.[0]?.plain_text ?? '',
     branch: t.properties.Branch?.rich_text?.[0]?.plain_text ?? '',
-    tmuxSession: t.properties['tmux Session']?.rich_text?.[0]?.plain_text ?? '',
+    ptySession: t.properties['pty Session']?.rich_text?.[0]?.plain_text ?? '',
     model: t.properties.Model?.rich_text?.[0]?.plain_text ?? '',
   }));
 }
@@ -50,7 +50,7 @@ async function updateTask(taskId, updates) {
   const properties = {};
   if (updates.status) properties.Status = { select: { name: updates.status } };
   if (updates.worktreePath) properties['Worktree Path'] = { rich_text: [{ text: { content: updates.worktreePath } }] };
-  if (updates.tmuxSession) properties['tmux Session'] = { rich_text: [{ text: { content: updates.tmuxSession } }] };
+  if (updates.ptySession) properties['pty Session'] = { rich_text: [{ text: { content: updates.ptySession } }] };
   return notion.pages.update({ page_id: taskId, properties });
 }
 
