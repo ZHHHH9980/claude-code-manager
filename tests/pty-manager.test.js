@@ -204,6 +204,17 @@ describe('Terminal.jsx font guards', () => {
     }
   });
 
+  // xterm.js canvas renderer does NOT do font fallback — CJK fonts must be explicitly listed
+  it('fontFamily must include at least one explicit CJK font', () => {
+    const fontFamily = getFontFamily();
+    const CJK_FONTS = ['PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'WenQuanYi', 'Noto Sans CJK', 'Source Han'];
+    const hasCJK = CJK_FONTS.some(f => fontFamily.includes(f));
+    assert.ok(
+      hasCJK,
+      `fontFamily must include an explicit CJK font (e.g. "PingFang SC") — xterm.js canvas renderer does not fall back automatically. Found: "${fontFamily}"`
+    );
+  });
+
   it('fontFamily must end with generic monospace fallback', () => {
     const fontFamily = getFontFamily();
     assert.ok(

@@ -21,7 +21,7 @@ export function Terminal({ socket, sessionName }) {
     const term = new XTerm({
       theme: { background: termBg, foreground: '#f0e6d7', cursor: '#f0e6d7' },
       fontSize: isMobile ? 13 : 15,
-      fontFamily: 'Menlo, Consolas, "Courier New", monospace',
+      fontFamily: 'Menlo, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "WenQuanYi Micro Hei", Consolas, "Courier New", monospace',
       lineHeight: isMobile ? 1.25 : 1.2,
       scrollback: 5000,
       cursorBlink: true,
