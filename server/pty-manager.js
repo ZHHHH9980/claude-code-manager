@@ -25,7 +25,10 @@ function createSession(sessionName, cwd) {
   if (tmuxSessionExists(sessionName)) {
     throw new Error(`tmux session ${sessionName} already exists`);
   }
-  execSync(asUser(`LANG=en_US.UTF-8 tmux new-session -d -s ${sessionName} -c "${cwd}"`));
+  execSync(asUser(`LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 tmux new-session -d -s ${sessionName} -c "${cwd}"`));
+  // tmux may reuse an existing server process; force locale on this session explicitly.
+  try { execSync(asUser(`tmux set-environment -t ${sessionName} LANG en_US.UTF-8`)); } catch {}
+  try { execSync(asUser(`tmux set-environment -t ${sessionName} LC_ALL en_US.UTF-8`)); } catch {}
   return attachSession(sessionName);
 }
 

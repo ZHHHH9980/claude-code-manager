@@ -184,6 +184,7 @@ function ensureTaskProcess(task, opts = {}) {
       if (!existed) {
         setTimeout(() => {
           try {
+            ptyManager.sendInput(sessionName, 'export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8\n');
             if (task.mode === 'ralph') ptyManager.sendInput(sessionName, './ralph.sh --tool claude\n');
             else {
               ptyManager.sendInput(sessionName, `claude --model ${task.model || 'claude-sonnet-4-5'} --dangerously-skip-permissions\n`);
