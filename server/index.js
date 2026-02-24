@@ -663,9 +663,11 @@ io.on('connection', (socket) => {
     onDataDisposable = entry.ptyProcess.onData((data) => socket.emit('terminal:data', data));
 
     // Replay current tmux screen content (with ANSI colors) so reopened terminals aren't blank
+    // Must run as TASK_USER since sessions are owned by that user
     try {
+      const taskUser = process.env.TASK_USER || 'ccm';
       const captured = execSync(
-        `tmux capture-pane -t ${sessionName} -p -e 2>/dev/null`
+        `su - ${taskUser} -c ${JSON.stringify(`tmux capture-pane -t ${sessionName} -p -e 2>/dev/null`)}`
       ).toString();
       if (captured.trim()) socket.emit('terminal:data', captured);
     } catch {}
