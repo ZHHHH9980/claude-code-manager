@@ -25,10 +25,11 @@ function createSession(sessionName, cwd) {
   if (tmuxSessionExists(sessionName)) {
     throw new Error(`tmux session ${sessionName} already exists`);
   }
-  execSync(asUser(`LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 tmux new-session -d -s ${sessionName} -c "${cwd}"`));
+  execSync(asUser(`LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 LC_CTYPE=en_US.UTF-8 tmux -u new-session -d -s ${sessionName} -c "${cwd}"`));
   // tmux may reuse an existing server process; force locale on this session explicitly.
   try { execSync(asUser(`tmux set-environment -t ${sessionName} LANG en_US.UTF-8`)); } catch {}
   try { execSync(asUser(`tmux set-environment -t ${sessionName} LC_ALL en_US.UTF-8`)); } catch {}
+  try { execSync(asUser(`tmux set-environment -t ${sessionName} LC_CTYPE en_US.UTF-8`)); } catch {}
   return attachSession(sessionName);
 }
 
@@ -47,14 +48,15 @@ function attachSession(sessionName) {
   if (sessions.has(sessionName)) {
     return sessions.get(sessionName);
   }
-  // Spawn as TASK_USER so --dangerously-skip-permissions is allowed
-  const ptyProcess = pty.spawn('su', ['-', TASK_USER, '-c', `tmux attach-session -t ${sessionName}`], {
+  // Spawn as TASK_USER so --dangerously-skip-permissions is allowed.
+  // -u forces tmux client output in UTF-8 even if locale detection is wrong.
+  const ptyProcess = pty.spawn('su', ['-', TASK_USER, '-c', `tmux -u attach-session -t ${sessionName}`], {
     name: 'xterm-256color',
     cols: 120,
     rows: 30,
     cwd: process.env.HOME,
     encoding: null,
-    env: { ...process.env, LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8' },
+    env: { ...process.env, LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8', LC_CTYPE: 'en_US.UTF-8' },
   });
   const entry = { ptyProcess, clients: new Set() };
   sessions.set(sessionName, entry);
@@ -81,7 +83,7 @@ function killSession(sessionName) {
 }
 
 function getTmuxAttachCmd(sessionName) {
-  return `su - ${TASK_USER} -c "tmux attach -t ${sessionName}"`;
+  return `su - ${TASK_USER} -c "tmux -u attach -t ${sessionName}"`;
 }
 
 function listAliveSessions() {
