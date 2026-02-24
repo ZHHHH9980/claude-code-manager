@@ -692,17 +692,9 @@ io.on('connection', (socket) => {
     entry.clients.add(socket);
     onDataDisposable = entry.ptyProcess.onData((data) => socket.emit('terminal:data', data));
 
-    // Replay current tmux screen content (with ANSI colors) so reopened terminals aren't blank
-    // Must run as TASK_USER since sessions are owned by that user
-    try {
-      const taskUser = process.env.TASK_USER || 'ccm';
-      const captured = execSync(
-        `su - ${taskUser} -c ${JSON.stringify(`tmux capture-pane -t ${sessionName} -p -e 2>/dev/null`)}`
-      ).toString();
-      if (captured.trim()) socket.emit('terminal:data', captured);
-    } catch {}
-
-    // Force SIGWINCH by toggling size — same-size resize doesn't trigger redraw
+    // Force SIGWINCH by toggling size — triggers a full redraw from the terminal app.
+    // capture-pane was removed: its ANSI absolute-position sequences conflict with xterm.js
+    // initial state and duplicate the content already sent by the SIGWINCH redraw.
     const { cols, rows } = entry.ptyProcess;
     if (cols > 1 && rows > 1) {
       entry.ptyProcess.resize(cols - 1, rows);
