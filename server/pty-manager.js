@@ -81,7 +81,7 @@ function createSession(sessionName, cwd) {
       entry.outputBuffer = entry.outputBuffer.slice(-MAX_OUTPUT_BUFFER);
     }
     for (const socket of entry.clients) {
-      try { socket.emit('terminal:data', text); } catch {}
+      try { socket.emit(`terminal:data:${sessionName}`, text); } catch {}
     }
   });
   entry.exitDisposable = ptyProcess.onExit(() => removeSession(sessionName));

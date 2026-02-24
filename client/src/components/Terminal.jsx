@@ -42,7 +42,7 @@ export function Terminal({ socket, sessionName }) {
       const last = lastSizeRef.current;
       if (!force && last.cols === cols && last.rows === rows) return;
       lastSizeRef.current = { cols, rows };
-      socket.emit('terminal:resize', { cols, rows });
+      socket.emit('terminal:resize', { sessionName, cols, rows });
     };
 
     const scheduleSyncSize = (force = false) => {
@@ -64,7 +64,7 @@ export function Terminal({ socket, sessionName }) {
     // Set up listeners BEFORE attaching so we don't miss initial data
     const onTerminalData = (data) => term.write(data);
     const onTerminalError = (msg) => term.writeln(`\r\n[terminal error] ${msg}`);
-    socket.on('terminal:data', onTerminalData);
+    socket.on(`terminal:data:${sessionName}`, onTerminalData);
     socket.on('terminal:error', onTerminalError);
 
     // Fit to container first so we send correct dimensions with attach.
@@ -80,7 +80,7 @@ export function Terminal({ socket, sessionName }) {
       term.focus();
     }, 200);
 
-    const inputDisposable = term.onData((data) => socket.emit('terminal:input', data));
+    const inputDisposable = term.onData((data) => socket.emit('terminal:input', { sessionName, data }));
     const focusHandler = () => term.focus();
     container.addEventListener('mousedown', focusHandler);
 
@@ -99,7 +99,7 @@ export function Terminal({ socket, sessionName }) {
       inputDisposable.dispose();
       term.dispose();
       observer.disconnect();
-      socket.off('terminal:data', onTerminalData);
+      socket.off(`terminal:data:${sessionName}`, onTerminalData);
       socket.off('terminal:error', onTerminalError);
       container.removeEventListener('mousedown', focusHandler);
     };

@@ -814,13 +814,15 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('terminal:input', (data) => {
-    if (currentSession) ptyManager.sendInput(currentSession, data);
+  socket.on('terminal:input', ({ sessionName: sn, data }) => {
+    const target = sn || currentSession;
+    if (target) ptyManager.sendInput(target, data);
   });
 
-  socket.on('terminal:resize', ({ cols, rows }) => {
-    if (currentSession && cols > 0 && rows > 0) {
-      ptyManager.resizeSession(currentSession, cols, rows);
+  socket.on('terminal:resize', ({ sessionName: sn, cols, rows }) => {
+    const target = sn || currentSession;
+    if (target && cols > 0 && rows > 0) {
+      ptyManager.resizeSession(target, cols, rows);
     }
   });
 

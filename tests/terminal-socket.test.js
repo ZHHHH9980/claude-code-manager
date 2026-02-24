@@ -78,10 +78,10 @@ function setupServer() {
         const entry = mockPtyManager.sessions.get(sessionName);
         if (!entry) return socket.emit('terminal:error', 'Session not found');
         entry.clients.add(socket);
-        onDataDisposable = entry.ptyProcess.onData((data) => socket.emit('terminal:data', data));
+        onDataDisposable = entry.ptyProcess.onData((data) => socket.emit(`terminal:data:${sessionName}`, data));
         // Replay current screen content (mirrors tmux capture-pane in real server)
         const captured = mockPtyManager.capturePane(sessionName);
-        if (captured && captured.trim()) socket.emit('terminal:data', captured);
+        if (captured && captured.trim()) socket.emit(`terminal:data:${sessionName}`, captured);
         // Resize PTY to client dimensions BEFORE SIGWINCH
         if (initCols && initRows) {
           mockPtyManager.resizeSession(sessionName, initCols, initRows);
@@ -94,13 +94,15 @@ function setupServer() {
         }
       });
 
-      socket.on('terminal:input', (data) => {
-        if (currentSession) mockPtyManager.sendInput(currentSession, data);
+      socket.on('terminal:input', ({ sessionName: sn, data }) => {
+        const target = sn || currentSession;
+        if (target) mockPtyManager.sendInput(target, data);
       });
 
-      socket.on('terminal:resize', ({ cols, rows }) => {
-        if (currentSession && cols > 0 && rows > 0) {
-          mockPtyManager.resizeSession(currentSession, cols, rows);
+      socket.on('terminal:resize', ({ sessionName: sn, cols, rows }) => {
+        const target = sn || currentSession;
+        if (target && cols > 0 && rows > 0) {
+          mockPtyManager.resizeSession(target, cols, rows);
         }
       });
 
@@ -169,7 +171,7 @@ describe('terminal socket handlers', () => {
   it('terminal:data flows from pty to client', async () => {
     const client = connectClient();
     await new Promise(r => client.on('connect', r));
-    const dataPromise = new Promise(r => client.on('terminal:data', r));
+    const dataPromise = new Promise(r => client.on('terminal:data:test-session', r));
     client.emit('terminal:attach', 'test-session');
     await wait(50);
     // Simulate pty output
@@ -186,7 +188,7 @@ describe('terminal socket handlers', () => {
     await new Promise(r => client.on('connect', r));
     client.emit('terminal:attach', 'test-session');
     await wait(50);
-    client.emit('terminal:input', 'user typed this');
+    client.emit('terminal:input', { sessionName: 'test-session', data: 'user typed this' });
     await wait(50);
     assert.equal(lastInputData, 'user typed this');
     client.disconnect();
@@ -199,7 +201,7 @@ describe('terminal socket handlers', () => {
     await new Promise(r => client.on('connect', r));
     client.emit('terminal:attach', 'test-session');
     await wait(150); // wait for SIGWINCH toggle (50ms setTimeout) to complete first
-    client.emit('terminal:resize', { cols: 200, rows: 60 });
+    client.emit('terminal:resize', { sessionName: 'test-session', cols: 200, rows: 60 });
     await wait(50);
     assert.equal(lastResizeCols, 200);
     assert.equal(lastResizeRows, 60);
@@ -214,7 +216,7 @@ describe('terminal socket handlers', () => {
     await wait(150);
     // Reset after attach resize + SIGWINCH toggle completes
     lastResizeCols = null;
-    client.emit('terminal:resize', { cols: 0, rows: -1 });
+    client.emit('terminal:resize', { sessionName: 'test-session', cols: 0, rows: -1 });
     await wait(50);
     assert.equal(lastResizeCols, null, 'should not resize with invalid dims');
     client.disconnect();
@@ -240,7 +242,7 @@ describe('terminal socket handlers', () => {
     client1.emit('terminal:attach', 'test-session');
     await wait(100);
     const cb1 = mockOnDataCallbacks[mockOnDataCallbacks.length - 1];
-    const data1Promise = new Promise(r => client1.on('terminal:data', r));
+    const data1Promise = new Promise(r => client1.on('terminal:data:test-session', r));
     cb1('first session data');
     const d1 = await data1Promise;
     assert.equal(d1, 'first session data');
@@ -251,7 +253,7 @@ describe('terminal socket handlers', () => {
     // Second connection — simulate modal reopen
     const client2 = connectClient();
     await new Promise(r => client2.on('connect', r));
-    const data2Promise = new Promise(r => client2.on('terminal:data', r));
+    const data2Promise = new Promise(r => client2.on('terminal:data:test-session', r));
     client2.emit('terminal:attach', 'test-session');
     await wait(100);
     // Simulate pty output after re-attach
@@ -322,7 +324,7 @@ describe('terminal socket handlers', () => {
 
     // Collect all terminal:data events received on attach
     const received = [];
-    client.on('terminal:data', (d) => received.push(d));
+    client.on('terminal:data:test-session', (d) => received.push(d));
     client.emit('terminal:attach', 'test-session');
     await wait(150);
 
