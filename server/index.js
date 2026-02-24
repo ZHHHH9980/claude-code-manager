@@ -94,6 +94,8 @@ app.post('/api/tasks/:id/start', (req, res) => {
             ptyManager.sendInput(sessionName, './ralph.sh --tool claude\n');
           } else {
             ptyManager.sendInput(sessionName, `claude --model ${model || 'claude-sonnet-4-5'} --dangerously-skip-permissions\n`);
+            // Auto-accept the --dangerously-skip-permissions confirmation dialog
+            setTimeout(() => { try { ptyManager.sendInput(sessionName, '\n'); } catch {} }, 3000);
           }
         } catch (err) {
           console.warn(`tmux sendInput failed for task ${id}:`, err?.message || err);
@@ -182,7 +184,11 @@ function ensureTaskProcess(task, opts = {}) {
         setTimeout(() => {
           try {
             if (task.mode === 'ralph') ptyManager.sendInput(sessionName, './ralph.sh --tool claude\n');
-            else ptyManager.sendInput(sessionName, `claude --model ${task.model || 'claude-sonnet-4-5'} --dangerously-skip-permissions\n`);
+            else {
+              ptyManager.sendInput(sessionName, `claude --model ${task.model || 'claude-sonnet-4-5'} --dangerously-skip-permissions\n`);
+              // Auto-accept the --dangerously-skip-permissions confirmation dialog
+              setTimeout(() => { try { ptyManager.sendInput(sessionName, '\n'); } catch {} }, 3000);
+            }
           } catch (err) {
             console.warn(`tmux sendInput failed for task ${task.id}:`, err?.message || err);
           }
