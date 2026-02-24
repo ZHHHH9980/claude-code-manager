@@ -182,6 +182,21 @@ export default function App() {
     }
   }
 
+  async function handleCreateProject({ name, repoPath }) {
+    const projectName = String(name || '').trim();
+    if (!projectName) return;
+    const res = await fetch('/api/projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: projectName, repoPath: repoPath || '', sshHost: '' }),
+    });
+    const created = await res.json();
+    const rows = await fetch('/api/projects').then((r) => r.json());
+    setProjects(rows);
+    const selected = rows.find((p) => String(p.id) === String(created?.id));
+    if (selected) setSelectedProject(selected);
+  }
+
   async function handleStartTask(task, mode) {
     const res = await fetch(`/api/tasks/${task.id}/start`, {
       method: 'POST',
@@ -413,7 +428,13 @@ export default function App() {
             </div>
             <div className="flex-1 min-h-0">
               {mobilePane === 'projects' && (
-                <ProjectList projects={projects} selectedId={selectedProject?.id} onSelect={setSelectedProject} mobile />
+                <ProjectList
+                  projects={projects}
+                  selectedId={selectedProject?.id}
+                  onSelect={setSelectedProject}
+                  onCreateProject={handleCreateProject}
+                  mobile
+                />
               )}
               {mobilePane === 'tasks' && (
                 <TaskBoard tasks={tasks} onOpenTerminal={handleOpenTask} onStartTask={handleStartTask} onDeleteTask={handleDeleteTask} onCreateTask={handleCreateTask} mobile />
@@ -423,7 +444,12 @@ export default function App() {
           </div>
         ) : (
           <>
-            <ProjectList projects={projects} selectedId={selectedProject?.id} onSelect={setSelectedProject} />
+            <ProjectList
+              projects={projects}
+              selectedId={selectedProject?.id}
+              onSelect={setSelectedProject}
+              onCreateProject={handleCreateProject}
+            />
             <div className="flex flex-col flex-1 min-w-0 min-h-0">
               <TaskBoard tasks={tasks} onOpenTerminal={handleOpenTask} onStartTask={handleStartTask} onDeleteTask={handleDeleteTask} onCreateTask={handleCreateTask} />
               {mainChatPanel}
