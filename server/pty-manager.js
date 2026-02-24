@@ -17,7 +17,7 @@ function createSession(sessionName, cwd) {
   if (tmuxSessionExists(sessionName)) {
     throw new Error(`tmux session ${sessionName} already exists`);
   }
-  execSync(`tmux new-session -d -s ${sessionName} -c "${cwd}"`);
+  execSync(`LANG=en_US.UTF-8 tmux new-session -d -s ${sessionName} -c "${cwd}"`);
   return attachSession(sessionName);
 }
 
@@ -41,6 +41,7 @@ function attachSession(sessionName) {
     cols: 120,
     rows: 30,
     cwd: process.env.HOME,
+    env: { ...process.env, LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8' },
   });
   const entry = { ptyProcess, clients: new Set() };
   sessions.set(sessionName, entry);
@@ -91,4 +92,3 @@ module.exports = {
   listAliveSessions,
   sessions,
 };
-// test
