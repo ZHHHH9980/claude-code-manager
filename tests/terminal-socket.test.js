@@ -37,6 +37,11 @@ mockSessions.set('test-session', {
 
 const mockPtyManager = {
   sessions: mockSessions,
+  // Simulated screen content per session (set in tests to control capture-pane output)
+  screenContent: new Map(),
+  capturePane(sessionName) {
+    return this.screenContent.get(sessionName) || '';
+  },
   resizeSession(name, cols, rows) {
     const entry = mockSessions.get(name);
     if (entry) entry.ptyProcess.resize(cols, rows);
@@ -70,6 +75,9 @@ function setupServer() {
         if (!entry) return socket.emit('terminal:error', 'Session not found');
         entry.clients.add(socket);
         onDataDisposable = entry.ptyProcess.onData((data) => socket.emit('terminal:data', data));
+        // Replay current screen content (mirrors tmux capture-pane in real server)
+        const captured = mockPtyManager.capturePane(sessionName);
+        if (captured && captured.trim()) socket.emit('terminal:data', captured);
         // SIGWINCH toggle
         const { cols, rows } = entry.ptyProcess;
         if (cols > 1 && rows > 1) {
@@ -264,5 +272,28 @@ describe('terminal socket handlers', () => {
     assert.equal(first.cols, 119, 'first resize should be cols-1');
     assert.equal(second.cols, 120, 'second resize should restore original cols');
     client.disconnect();
+  });
+
+  // CRITICAL: screen content must be replayed on attach (page refresh scenario)
+  it('[CRITICAL] screen content replayed on attach (page refresh / modal reopen)', async () => {
+    const SCREEN = '\x1b[32mClaude Code v2.1.50\x1b[0m\r\n> hello\r\nHey! How can I help?\r\n';
+    mockPtyManager.screenContent.set('test-session', SCREEN);
+
+    const client = connectClient();
+    await new Promise(r => client.on('connect', r));
+
+    // Collect all terminal:data events received on attach
+    const received = [];
+    client.on('terminal:data', (d) => received.push(d));
+    client.emit('terminal:attach', 'test-session');
+    await wait(150);
+
+    mockPtyManager.screenContent.delete('test-session');
+    client.disconnect();
+
+    assert.ok(
+      received.some(d => d.includes('Claude Code')),
+      `screen content must be sent on attach — got: ${JSON.stringify(received)}`
+    );
   });
 });
