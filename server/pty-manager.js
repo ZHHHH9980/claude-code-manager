@@ -1,3 +1,4 @@
+// Task-terminal critical module — changes gated by pre-commit smoke tests
 const pty = require('node-pty');
 const { execSync } = require('child_process');
 
@@ -90,3 +91,4 @@ module.exports = {
   listAliveSessions,
   sessions,
 };
+// test
