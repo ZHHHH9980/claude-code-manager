@@ -687,7 +687,12 @@ io.on('connection', (socket) => {
     if (tail) socket.emit('terminal:data', tail);
   }
 
-  socket.on('terminal:attach', (sessionName) => {
+  socket.on('terminal:attach', (payload) => {
+    // Support legacy string and new object form {sessionName, cols, rows}
+    const sessionName = typeof payload === 'string' ? payload : payload?.sessionName;
+    const initCols = typeof payload === 'object' && payload?.cols > 0 ? payload.cols : null;
+    const initRows = typeof payload === 'object' && payload?.rows > 0 ? payload.rows : null;
+
     // Clean up previous listener if re-attaching.
     disposeTerminalSubscription();
     currentSession = sessionName;
@@ -710,9 +715,13 @@ io.on('connection', (socket) => {
       socket.emit('terminal:data', String(data));
     });
 
+    // If client sent its dimensions, resize PTY to match BEFORE SIGWINCH so tmux
+    // redraws at the correct size (prevents status-bar row mismatch and missing content).
+    if (initCols && initRows) {
+      ptyManager.resizeSession(sessionName, initCols, initRows);
+    }
+
     // Force SIGWINCH by toggling size — triggers a full redraw from the terminal app.
-    // capture-pane was removed: its ANSI absolute-position sequences conflict with xterm.js
-    // initial state and duplicate the content already sent by the SIGWINCH redraw.
     const { cols, rows } = entry.ptyProcess;
     if (cols > 1 && rows > 1) {
       entry.ptyProcess.resize(cols - 1, rows);

@@ -25,7 +25,7 @@ const mockPtyProcess = {
     mockOnDataCallbacks.push(cb);
     return { dispose: mock.fn() };
   },
-  resize(c, r) { lastResizeCols = c; lastResizeRows = r; },
+  resize(c, r) { lastResizeCols = c; lastResizeRows = r; this.cols = c; this.rows = r; },
   write(data) { lastInputData = data; },
 };
 
@@ -65,7 +65,11 @@ function setupServer() {
       let currentSession = null;
       let onDataDisposable = null;
 
-      socket.on('terminal:attach', (sessionName) => {
+      socket.on('terminal:attach', (payload) => {
+        const sessionName = typeof payload === 'string' ? payload : payload?.sessionName;
+        const initCols = typeof payload === 'object' && payload?.cols > 0 ? payload.cols : null;
+        const initRows = typeof payload === 'object' && payload?.rows > 0 ? payload.rows : null;
+
         if (onDataDisposable) {
           try { onDataDisposable.dispose(); } catch {}
           onDataDisposable = null;
@@ -78,6 +82,10 @@ function setupServer() {
         // Replay current screen content (mirrors tmux capture-pane in real server)
         const captured = mockPtyManager.capturePane(sessionName);
         if (captured && captured.trim()) socket.emit('terminal:data', captured);
+        // Resize PTY to client dimensions BEFORE SIGWINCH
+        if (initCols && initRows) {
+          mockPtyManager.resizeSession(sessionName, initCols, initRows);
+        }
         // SIGWINCH toggle
         const { cols, rows } = entry.ptyProcess;
         if (cols > 1 && rows > 1) {
@@ -190,7 +198,7 @@ describe('terminal socket handlers', () => {
     const client = connectClient();
     await new Promise(r => client.on('connect', r));
     client.emit('terminal:attach', 'test-session');
-    await wait(50);
+    await wait(150); // wait for SIGWINCH toggle (50ms setTimeout) to complete first
     client.emit('terminal:resize', { cols: 200, rows: 60 });
     await wait(50);
     assert.equal(lastResizeCols, 200);
@@ -257,8 +265,11 @@ describe('terminal socket handlers', () => {
   it('[CRITICAL] SIGWINCH toggle fires on attach (cols-1 then cols)', async () => {
     lastResizeCols = null;
     lastResizeRows = null;
+    // Reset to known initial size so SIGWINCH expectations are deterministic
+    mockPtyProcess.cols = 120;
+    mockPtyProcess.rows = 30;
     const resizes = [];
-    const origResize = mockPtyProcess.resize;
+    const origResize = mockPtyProcess.resize.bind(mockPtyProcess);
     mockPtyProcess.resize = (c, r) => { resizes.push({ cols: c, rows: r }); origResize(c, r); };
     const client = connectClient();
     await new Promise(r => client.on('connect', r));
@@ -271,6 +282,33 @@ describe('terminal socket handlers', () => {
     const second = resizes[resizes.length - 1];
     assert.equal(first.cols, 119, 'first resize should be cols-1');
     assert.equal(second.cols, 120, 'second resize should restore original cols');
+    client.disconnect();
+  });
+
+  // CRITICAL: when attach includes {sessionName, cols, rows}, PTY must be resized to those
+  // dimensions BEFORE the SIGWINCH toggle so tmux redraws at the correct size.
+  it('[CRITICAL] terminal:attach with {sessionName,cols,rows} resizes PTY before SIGWINCH', async () => {
+    // Reset to known initial size
+    mockPtyProcess.cols = 120;
+    mockPtyProcess.rows = 30;
+    const resizes = [];
+    const origResize = mockPtyProcess.resize.bind(mockPtyProcess);
+    mockPtyProcess.resize = (c, r) => { resizes.push({ cols: c, rows: r }); origResize(c, r); };
+
+    const client = connectClient();
+    await new Promise(r => client.on('connect', r));
+    // Send attach with explicit client dimensions (110 cols × 23 rows)
+    client.emit('terminal:attach', { sessionName: 'test-session', cols: 110, rows: 23 });
+    await wait(150);
+    mockPtyProcess.resize = origResize;
+
+    // First resize must be to client dimensions (110×23), not cols-1
+    assert.ok(resizes.length >= 3, `expected >=3 resizes, got ${resizes.length}: ${JSON.stringify(resizes)}`);
+    assert.equal(resizes[0].cols, 110, 'first resize must set PTY to client cols (110)');
+    assert.equal(resizes[0].rows, 23, 'first resize must set PTY to client rows (23)');
+    // Then SIGWINCH toggle: cols-1 then cols (now 110)
+    assert.equal(resizes[1].cols, 109, 'SIGWINCH: second resize must be cols-1 (109)');
+    assert.equal(resizes[2].cols, 110, 'SIGWINCH: third resize must restore cols (110)');
     client.disconnect();
   });
 

@@ -44,9 +44,13 @@ export function Terminal({ socket, sessionName }) {
     socket.on('terminal:data', onTerminalData);
     socket.on('terminal:error', onTerminalError);
 
-    socket.emit('terminal:attach', sessionName);
+    // Fit to container first so we send correct dimensions with attach.
+    // This ensures tmux redraws at the right size (prevents status-bar row mismatch).
+    safeFit(fitAddon);
+    socket.emit('terminal:attach', { sessionName, cols: term.cols, rows: term.rows });
+    socket.emit('terminal:resize', { cols: term.cols, rows: term.rows });
 
-    // Delay fit + resize until container is visible and laid out
+    // Focus after a short delay (container may not be fully visible yet)
     const initTimer = setTimeout(() => {
       safeFit(fitAddon);
       syncSize();
