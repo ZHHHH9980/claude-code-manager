@@ -663,7 +663,12 @@ io.on('connection', (socket) => {
       onDataDisposable = null;
     }
     currentSession = sessionName;
-    const entry = ptyManager.sessions.get(sessionName);
+    let entry = ptyManager.sessions.get(sessionName);
+    // After server restart the in-memory map is empty but the tmux session may still exist.
+    // Re-attach the pty so the client can reconnect without losing the running session.
+    if (!entry && ptyManager.sessionExists(sessionName)) {
+      try { entry = ptyManager.attachSession(sessionName); } catch {}
+    }
     if (!entry) return socket.emit('terminal:error', 'Session not found');
     entry.clients.add(socket);
     onDataDisposable = entry.ptyProcess.onData((data) => socket.emit('terminal:data', data));
