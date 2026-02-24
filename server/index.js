@@ -344,7 +344,6 @@ function startClaudeStream({ cwd, message, onProcess, scope, taskId = null, sess
   const startedAtMs = Date.now();
   let firstTokenAtMs = null;
   let chunkCount = 0;
-  let emittedStdoutText = false;
   let doneLogged = false;
 
   function finalize(reason, extra = {}) {
@@ -400,7 +399,6 @@ function startClaudeStream({ cwd, message, onProcess, scope, taskId = null, sess
 
   function emitStreamText(text, extra = {}) {
     if (!text || res.writableEnded) return;
-    if (!extra.stderr) emittedStdoutText = true;
     res.write(`data: ${JSON.stringify({ text, ...extra })}\n\n`);
   }
 
@@ -456,7 +454,7 @@ function startClaudeStream({ cwd, message, onProcess, scope, taskId = null, sess
     finalize(signal ? 'signal_exit' : 'process_exit', { exit_code: code, exit_signal: signal || null });
     if (!res.writableEnded) {
       const isAbnormal = Boolean(signal) || (typeof code === 'number' && code !== 0);
-      if (isAbnormal && !emittedStdoutText) {
+      if (isAbnormal) {
         res.write(`data: ${JSON.stringify({
           error: true,
           error_code: 'PROCESS_EXIT',
@@ -466,7 +464,7 @@ function startClaudeStream({ cwd, message, onProcess, scope, taskId = null, sess
           signal,
         })}\n\n`);
       } else {
-        res.write(`data: ${JSON.stringify({ done: true, code, signal, degraded: isAbnormal })}\n\n`);
+        res.write(`data: ${JSON.stringify({ done: true, code, signal })}\n\n`);
       }
       res.end();
     }
@@ -498,31 +496,133 @@ function startClaudeStream({ cwd, message, onProcess, scope, taskId = null, sess
   return child;
 }
 
-// Agent chat - powered by Claude Code (SSE streaming)
-let activeAgentProcess = null;
+// Agent chat - keep one hot runtime like task chat to avoid cold-start each turn.
+const AGENT_RUNTIME_KEY = '__agent_home__';
+let agentChatSessionId = null;
+
+function resetAgentChat(reason = 'agent_reset') {
+  taskChatRuntimeManager.stopTask(AGENT_RUNTIME_KEY, reason);
+  agentChatSessionId = null;
+}
+
+const AGENT_TERMINAL_SESSION = process.env.AGENT_TERMINAL_SESSION || 'claude-agent-home';
+
+function startAgentTerminalSession() {
+  const cwd = path.join(__dirname, '..');
+  let tmuxAvailable = true;
+  try {
+    const existed = ptyManager.sessionExists(AGENT_TERMINAL_SESSION);
+    ptyManager.ensureSession(AGENT_TERMINAL_SESSION, cwd);
+    if (!existed) {
+      setTimeout(() => {
+        try {
+          ptyManager.sendInput(AGENT_TERMINAL_SESSION, 'export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 LC_CTYPE=en_US.UTF-8\n');
+          ptyManager.sendInput(AGENT_TERMINAL_SESSION, 'claude --model claude-sonnet-4-5 --dangerously-skip-permissions\n');
+          setTimeout(() => { try { ptyManager.sendInput(AGENT_TERMINAL_SESSION, '\n'); } catch {} }, 3000);
+        } catch (err) {
+          console.warn('agent terminal sendInput failed:', err?.message || err);
+        }
+      }, 500);
+    }
+  } catch (err) {
+    tmuxAvailable = false;
+    console.warn('agent terminal unavailable:', err?.message || err);
+  }
+  return {
+    sessionName: AGENT_TERMINAL_SESSION,
+    tmuxCmd: ptyManager.getTmuxAttachCmd(AGENT_TERMINAL_SESSION),
+    tmuxAvailable,
+  };
+}
+
+app.get('/api/agent/history', (req, res) => {
+  res.json({ messages: db.getAgentChatMessages(400) });
+});
+
+app.delete('/api/agent/history', (req, res) => {
+  resetAgentChat('agent_clear_history');
+  db.clearAgentChatMessages();
+  res.json({ ok: true });
+});
+
+app.post('/api/agent/terminal/start', (req, res) => {
+  const payload = startAgentTerminalSession();
+  res.json(payload);
+});
+
+app.post('/api/agent/terminal/stop', (req, res) => {
+  try { ptyManager.killSession(AGENT_TERMINAL_SESSION); } catch {}
+  res.json({ ok: true });
+});
 
 app.post('/api/agent', (req, res) => {
-  const { message } = req.body;
-  if (!message) return res.status(400).json({ error: 'message required' });
+  try {
+    const prompt = String(req.body?.message || '').trim();
+    if (!prompt) return res.status(400).json({ error: 'message required' });
 
-  if (activeAgentProcess) {
-    try { activeAgentProcess.kill('SIGTERM'); } catch {}
-    activeAgentProcess = null;
-  }
+    const hasSession = Boolean(agentChatSessionId);
+    const sessionId = agentChatSessionId || randomUUID();
+    if (!hasSession) agentChatSessionId = sessionId;
+    db.appendAgentChatMessage('user', prompt);
 
-  const cwd = path.join(__dirname, '..');
-  startClaudeStream(
-    {
+    const cwd = path.join(__dirname, '..');
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    if (typeof res.flushHeaders === 'function') res.flushHeaders();
+    res.write(`data: ${JSON.stringify({ ready: true })}\n\n`);
+
+    let clientClosed = false;
+    const heartbeat = setInterval(() => {
+      if (!res.writableEnded) res.write(': ping\n\n');
+    }, 15000);
+    const cleanup = () => clearInterval(heartbeat);
+
+    res.on('close', () => {
+      clientClosed = true;
+      cleanup();
+    });
+
+    let assistantText = '';
+    taskChatRuntimeManager.send({
+      taskId: AGENT_RUNTIME_KEY,
       cwd,
-      message,
-      scope: 'agent',
-      onProcess: (child) => {
-        activeAgentProcess = child;
-        child.on('close', () => { activeAgentProcess = null; });
+      sessionId,
+      resumeSession: hasSession,
+      prompt,
+      timeoutMs: 300000,
+      onAssistantText: (text) => {
+        if (clientClosed || res.writableEnded) return;
+        assistantText += String(text || '');
+        res.write(`data: ${JSON.stringify({ text })}\n\n`);
       },
-    },
-    res
-  );
+    }).then(() => {
+      cleanup();
+      if (assistantText.trim()) db.appendAgentChatMessage('assistant', assistantText);
+      if (!clientClosed && !res.writableEnded) {
+        res.write(`data: ${JSON.stringify({ done: true, code: 0, signal: null })}\n\n`);
+        res.end();
+      }
+    }).catch((err) => {
+      cleanup();
+      taskChatRuntimeManager.stopTask(AGENT_RUNTIME_KEY, 'agent_runtime_error');
+      const msg = String(err?.message || 'agent chat runtime error');
+      if (/not logged in|authentication_failed|session .* not found|invalid session/i.test(msg)) {
+        agentChatSessionId = null;
+      }
+      if (res.writableEnded || clientClosed) return;
+      res.write(`data: ${JSON.stringify({
+        error: true,
+        error_code: 'AGENT_RUNTIME_ERROR',
+        text: msg,
+        done: true,
+      })}\n\n`);
+      res.end();
+    });
+  } catch (err) {
+    if (res.writableEnded) return;
+    res.status(500).json({ error: err?.message || 'agent chat failed' });
+  }
 });
 
 app.post('/api/tasks/:id/chat', (req, res) => {
@@ -676,20 +776,16 @@ function recoverSessions() {
 io.on('connection', (socket) => {
   let currentSession = null;
 
-  function detachFromCurrentSession() {
-    if (!currentSession) return;
-    const prev = ptyManager.sessions.get(currentSession);
-    if (prev) prev.clients.delete(socket);
-    currentSession = null;
-  }
-
   socket.on('terminal:attach', (payload) => {
     // Support legacy string and new object form {sessionName, cols, rows}
     const sessionName = typeof payload === 'string' ? payload : payload?.sessionName;
     const initCols = typeof payload === 'object' && payload?.cols > 0 ? payload.cols : null;
     const initRows = typeof payload === 'object' && payload?.rows > 0 ? payload.rows : null;
 
-    detachFromCurrentSession();
+    if (currentSession) {
+      const prev = ptyManager.sessions.get(currentSession);
+      if (prev) prev.clients.delete(socket);
+    }
     currentSession = sessionName;
     let entry = ptyManager.sessions.get(sessionName);
     if (!entry && ptyManager.sessionExists(sessionName)) {
@@ -697,8 +793,12 @@ io.on('connection', (socket) => {
     }
     if (!entry) return socket.emit('terminal:error', 'Session not found');
     entry.clients.add(socket);
-    const replay = ptyManager.getBufferedOutput(sessionName);
-    if (replay) socket.emit('terminal:data', replay);
+
+    // Replay session buffer on attach so reconnect/new tab can see recent output.
+    const buffered = ptyManager.getBufferedOutput
+      ? ptyManager.getBufferedOutput(sessionName)
+      : '';
+    if (buffered) socket.emit('terminal:data', buffered);
 
     // If client sent its dimensions, resize PTY to match BEFORE SIGWINCH so tmux
     // redraws at the correct size (prevents status-bar row mismatch and missing content).
@@ -709,9 +809,8 @@ io.on('connection', (socket) => {
     // Force SIGWINCH by toggling size — triggers a full redraw from the terminal app.
     const { cols, rows } = entry.ptyProcess;
     if (cols > 1 && rows > 1) {
-      // Keep tmux internal size in sync while triggering SIGWINCH.
-      ptyManager.resizeSession(sessionName, cols - 1, rows);
-      setTimeout(() => ptyManager.resizeSession(sessionName, cols, rows), 50);
+      entry.ptyProcess.resize(cols - 1, rows);
+      setTimeout(() => entry.ptyProcess.resize(cols, rows), 50);
     }
   });
 
@@ -726,7 +825,10 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    detachFromCurrentSession();
+    if (currentSession) {
+      const entry = ptyManager.sessions.get(currentSession);
+      if (entry) entry.clients.delete(socket);
+    }
   });
 });
 

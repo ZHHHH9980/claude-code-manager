@@ -110,6 +110,7 @@ export function AssistantChatWindow({
       const decoder = new TextDecoder();
       let buffer = '';
       let sawDoneEvent = false;
+      let sawAssistantText = false;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -136,9 +137,9 @@ export function AssistantChatWindow({
 
           if (event.ready) continue;
           if (event.error) throw new Error(fromEventError(event));
-          if (event.stderr) continue;
 
           if (event.text) {
+            sawAssistantText = true;
             setPhase('streaming');
             setMessages((prev) => {
               const updated = [...prev];
@@ -153,7 +154,9 @@ export function AssistantChatWindow({
           if (event.done) {
             sawDoneEvent = true;
             if (event.error) throw new Error(fromEventError(event));
-            if (!event.degraded && (event.signal || (typeof event.code === 'number' && event.code !== 0))) {
+            const isAbnormalExit = event.signal || (typeof event.code === 'number' && event.code !== 0);
+            const keepDegradedOutput = Boolean(event.degraded) && sawAssistantText;
+            if (isAbnormalExit && !keepDegradedOutput) {
               throw new Error(`agent exited unexpectedly (code=${event.code ?? 'null'}, signal=${event.signal ?? 'null'})`);
             }
             setPhase('idle');
@@ -177,7 +180,8 @@ export function AssistantChatWindow({
         const updated = [...prev];
         const last = updated[updated.length - 1];
         const text = `Error: ${normalizeErrMessage(err)}`;
-        if (last?.role === 'assistant') last.text = text;
+        if (last?.role === 'assistant' && String(last.text || '').trim()) last.text = `${last.text}\n\n${text}`;
+        else if (last?.role === 'assistant') last.text = text;
         else updated.push({ role: 'assistant', text });
         return updated;
       });
@@ -199,7 +203,16 @@ export function AssistantChatWindow({
   return (
     <div className={`flex flex-col border-t h-full min-h-0 overflow-hidden ${className}`} style={{ borderColor: 'var(--border)' }}>
       <div className="px-4 py-2 text-xs border-b flex items-center justify-between" style={{ borderColor: 'var(--border)', color: 'var(--text-3)' }}>
-        <span>{title}</span>
+        <div className="flex items-center gap-2 min-w-0">
+          <span
+            aria-hidden
+            className="inline-flex items-center justify-center w-5 h-5 rounded-md text-[10px] font-semibold shrink-0"
+            style={{ background: '#d97757', color: '#fff' }}
+          >
+            CC
+          </span>
+          <span className="truncate">{title}</span>
+        </div>
         <div className="flex items-center gap-2">
           <span>{getStatusLabel(phase)}</span>
           <button type="button" onClick={handleClear} className="ccm-button ccm-button-soft text-xs px-2 py-0.5">Clear</button>

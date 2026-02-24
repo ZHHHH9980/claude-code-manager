@@ -44,6 +44,13 @@ db.exec(`
     created_at TEXT DEFAULT (datetime('now')),
     FOREIGN KEY (task_id) REFERENCES tasks(id)
   );
+
+  CREATE TABLE IF NOT EXISTS agent_chat_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    role TEXT NOT NULL,
+    text TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
 `);
 
 function ensureTaskSchema() {
@@ -145,6 +152,29 @@ function clearTaskChatMessages(taskId) {
   db.prepare('DELETE FROM task_chat_messages WHERE task_id = ?').run(taskId);
 }
 
+function getAgentChatMessages(limit = 300) {
+  const safeLimit = Math.max(1, Math.min(Number(limit) || 300, 1000));
+  return db.prepare(
+    `SELECT role, text, created_at
+     FROM agent_chat_messages
+     ORDER BY id ASC
+     LIMIT ?`
+  ).all(safeLimit);
+}
+
+function appendAgentChatMessage(role, text) {
+  const safeRole = role === 'assistant' ? 'assistant' : 'user';
+  const safeText = String(text || '').trim();
+  if (!safeText) return;
+  db.prepare(
+    'INSERT INTO agent_chat_messages (role, text) VALUES (?, ?)'
+  ).run(safeRole, safeText);
+}
+
+function clearAgentChatMessages() {
+  db.prepare('DELETE FROM agent_chat_messages').run();
+}
+
 function deleteProject(id) {
   const tasks = db.prepare('SELECT id FROM tasks WHERE project_id = ?').all(id);
   for (const t of tasks) {
@@ -173,6 +203,9 @@ module.exports = {
   getTaskChatMessages,
   appendTaskChatMessage,
   clearTaskChatMessages,
+  getAgentChatMessages,
+  appendAgentChatMessage,
+  clearAgentChatMessages,
   deleteProject,
   deleteTask,
 };

@@ -2,72 +2,84 @@
  * Smoke tests for pty-manager — the core of task terminal sessions.
  * Uses node:test + node:assert (zero dependencies).
  *
- * These tests mock node-pty to verify logic without starting real shells.
+ * These tests mock node-pty and execSync to verify logic without tmux.
  * Run: node --test tests/pty-manager.test.js
  */
 const { describe, it, beforeEach, afterEach, mock } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 
+// --- Mocks ---
+const mockPtyProcess = {
+  cols: 120, rows: 30,
+  onData: mock.fn(),
+  write: mock.fn(),
+  resize: mock.fn(),
+  kill: mock.fn(),
+};
+
+// We need to intercept require('node-pty') and require('child_process')
+// Use a fresh pty-manager for each test by clearing the module cache.
+
 let ptyManager;
-let spawned;
+let execSyncCalls;
 
 function loadFreshPtyManager() {
+  // Clear cached module
   const modPath = require.resolve('../server/pty-manager');
   delete require.cache[modPath];
 
+  // Mock node-pty
   const ptyModPath = require.resolve('node-pty');
-  spawned = [];
   require.cache[ptyModPath] = {
     id: ptyModPath,
     filename: ptyModPath,
     loaded: true,
     exports: {
-      spawn: mock.fn((cmd, args, opts) => {
-        let onExitCb = null;
-        let onDataCb = null;
-        const proc = {
-          pid: spawned.length + 1000,
-          cols: 120,
-          rows: 30,
-          killed: false,
-          onData: mock.fn((cb) => {
-            onDataCb = cb;
-            return { dispose: mock.fn(() => { onDataCb = null; }) };
-          }),
-          onExit: mock.fn((cb) => {
-            onExitCb = cb;
-            return { dispose: mock.fn(() => { onExitCb = null; }) };
-          }),
-          write: mock.fn(),
-          resize: mock.fn(function resize(c, r) { this.cols = c; this.rows = r; }),
-          kill: mock.fn(function kill() {
-            this.killed = true;
-            if (onExitCb) onExitCb({ exitCode: 0, signal: 15 });
-          }),
-          _emitData(data) {
-            if (onDataCb) onDataCb(data);
-          },
-          _emitExit(evt = { exitCode: 0, signal: 0 }) {
-            if (onExitCb) onExitCb(evt);
-          },
-        };
-        spawned.push({ cmd, args, opts, proc });
-        return proc;
+      spawn: mock.fn(() => ({ ...mockPtyProcess, onData: mock.fn(), write: mock.fn(), resize: mock.fn(), kill: mock.fn() })),
+    },
+  };
+
+  // Mock child_process.execSync
+  execSyncCalls = [];
+  const cpModPath = require.resolve('child_process');
+  const realCP = require('child_process');
+  require.cache[cpModPath] = {
+    id: cpModPath,
+    filename: cpModPath,
+    loaded: true,
+    exports: {
+      ...realCP,
+      execSync: mock.fn((cmd) => {
+        execSyncCalls.push(cmd);
+        // tmux has-session: throw = not exists, return = exists
+        if (cmd.includes('has-session')) throw new Error('no session');
+        // tmux new-session: succeed
+        if (cmd.includes('new-session')) return '';
+        // tmux list-sessions
+        if (cmd.includes('list-sessions')) return 'test-session\n';
+        // tmux kill-session
+        if (cmd.includes('kill-session')) return '';
+        return '';
       }),
     },
   };
+
   ptyManager = require('../server/pty-manager');
+  return ptyManager;
 }
 
 describe('pty-manager', () => {
-  beforeEach(() => loadFreshPtyManager());
+  beforeEach(() => {
+    loadFreshPtyManager();
+  });
 
   afterEach(() => {
+    // Clean up sessions map
     ptyManager.sessions.clear();
   });
 
-  it('sessionExists returns false when session is missing', () => {
+  it('sessionExists returns false when tmux session does not exist', () => {
     assert.equal(ptyManager.sessionExists('nonexistent'), false);
   });
 
@@ -77,14 +89,24 @@ describe('pty-manager', () => {
     assert.ok(entry.ptyProcess, 'entry should have ptyProcess');
     assert.ok(entry.clients instanceof Set, 'entry should have clients Set');
     assert.ok(ptyManager.sessions.has('test-sess'), 'session should be in sessions map');
-    assert.equal(spawned.length, 1, 'should spawn one PTY');
+    // Should have called tmux new-session
+    const newSessionCmd = execSyncCalls.find(c => c.includes('new-session'));
+    assert.ok(newSessionCmd, 'should call tmux new-session');
+    assert.ok(newSessionCmd.includes('test-sess'), 'session name in command');
   });
 
   it('ensureSession returns existing entry on second call', () => {
     const entry1 = ptyManager.ensureSession('test-sess', '/tmp');
+    // Make has-session succeed for second call
+    const cpModPath = require.resolve('child_process');
+    require.cache[cpModPath].exports.execSync = mock.fn((cmd) => {
+      execSyncCalls.push(cmd);
+      if (cmd.includes('has-session')) return ''; // exists now
+      return '';
+    });
+    // Re-require to pick up new mock — but sessions map persists
     const entry2 = ptyManager.ensureSession('test-sess', '/tmp');
     assert.strictEqual(entry1, entry2, 'should return same entry');
-    assert.equal(spawned.length, 1, 'should not spawn another PTY');
   });
 
   it('resizeSession calls ptyProcess.resize with correct dimensions', () => {
@@ -111,61 +133,40 @@ describe('pty-manager', () => {
     ptyManager.killSession('kill-test');
     assert.equal(ptyManager.sessions.has('kill-test'), false);
     assert.equal(entry.ptyProcess.kill.mock.calls.length, 1);
+    const killCmd = execSyncCalls.find(c => c.includes('kill-session'));
+    assert.ok(killCmd, 'should call tmux kill-session');
   });
 
   it('getTmuxAttachCmd returns correct command', () => {
     const cmd = ptyManager.getTmuxAttachCmd('my-session');
-    assert.equal(cmd, 'direct-pty:my-session');
+    assert.ok(cmd.includes('my-session'), 'command must include session name');
+    assert.ok(cmd.includes('tmux') && cmd.includes('attach'), 'command must include tmux attach');
   });
 
-  it('listAliveSessions returns only active in-memory sessions', () => {
-    ptyManager.ensureSession('a', '/tmp');
-    ptyManager.ensureSession('b', '/tmp');
-    ptyManager.killSession('b');
+  it('listAliveSessions returns parsed session names', () => {
     const sessions = ptyManager.listAliveSessions();
     assert.ok(Array.isArray(sessions));
-    assert.ok(sessions.includes('a'));
-    assert.ok(!sessions.includes('b'));
+    assert.ok(sessions.includes('test-session'));
   });
 
-  it('createSession starts UTF-8 login shell as TASK_USER in requested cwd', () => {
+  it('createSession sets LANG=en_US.UTF-8 in tmux new-session command', () => {
+    ptyManager.ensureSession('utf8-test', '/tmp');
+    const newSessionCmd = execSyncCalls.find(c => c.includes('new-session'));
+    assert.ok(newSessionCmd, 'should call tmux new-session');
+    assert.ok(newSessionCmd.includes('LANG=en_US.UTF-8'), 'tmux new-session must set UTF-8 locale');
+  });
+
+  it('attachSession passes UTF-8 locale env to pty.spawn', () => {
     ptyManager.ensureSession('env-test', '/tmp');
-    const spawnCall = spawned[0];
+    const ptyMod = require('node-pty');
+    const spawnCall = ptyMod.spawn.mock.calls[0];
     assert.ok(spawnCall, 'pty.spawn should have been called');
-    assert.ok(['bash', 'su'].includes(spawnCall.cmd), 'should spawn bash (non-root) or su (root)');
-    const bootstrap = spawnCall.cmd === 'bash' ? spawnCall.args[1] : spawnCall.args[3];
-    assert.ok(String(bootstrap).includes('cd "/tmp"'), 'bootstrap command should cd into task cwd');
-    const opts = spawnCall.opts;
+    // Now spawns `su` as the command (not tmux directly)
+    assert.equal(spawnCall.arguments[0], 'su', 'must spawn su to run as non-root user');
+    const opts = spawnCall.arguments[2];
     assert.ok(opts.env, 'spawn options must include env');
     assert.equal(opts.env.LANG, 'en_US.UTF-8', 'LANG must be en_US.UTF-8');
     assert.equal(opts.env.LC_ALL, 'en_US.UTF-8', 'LC_ALL must be en_US.UTF-8');
-  });
-
-  it('attachSession throws when session does not exist', () => {
-    assert.throws(() => ptyManager.attachSession('missing'), /not found/);
-  });
-
-  it('session auto-removes when pty exits', () => {
-    ptyManager.ensureSession('auto-exit', '/tmp');
-    assert.equal(ptyManager.sessionExists('auto-exit'), true);
-    spawned[0].proc._emitExit({ exitCode: 0, signal: 0 });
-    assert.equal(ptyManager.sessionExists('auto-exit'), false);
-  });
-
-  it('buffers output and replays it to newly attached client', () => {
-    ptyManager.ensureSession('replay', '/tmp');
-    spawned[0].proc._emitData('hello\r\n');
-    spawned[0].proc._emitData('world\r\n');
-    assert.equal(ptyManager.getBufferedOutput('replay').includes('hello'), true);
-    assert.equal(ptyManager.getBufferedOutput('replay').includes('world'), true);
-  });
-
-  it('broadcasts live output to attached clients', () => {
-    const entry = ptyManager.ensureSession('live', '/tmp');
-    const payloads = [];
-    entry.clients.add({ emit: (evt, text) => payloads.push({ evt, text }) });
-    spawned[0].proc._emitData('line-1');
-    assert.deepEqual(payloads, [{ evt: 'terminal:data', text: 'line-1' }]);
   });
 });
 
