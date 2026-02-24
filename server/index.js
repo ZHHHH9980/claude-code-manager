@@ -648,16 +648,34 @@ function recoverSessions() {
 // WebSocket
 io.on('connection', (socket) => {
   let currentSession = null;
+  let onDataDisposable = null;
 
   socket.on('terminal:attach', (sessionName) => {
+    // Clean up previous listener if re-attaching
+    if (onDataDisposable) {
+      try { onDataDisposable.dispose(); } catch {}
+      onDataDisposable = null;
+    }
     currentSession = sessionName;
     const entry = ptyManager.sessions.get(sessionName);
     if (!entry) return socket.emit('terminal:error', 'Session not found');
     entry.clients.add(socket);
-    entry.ptyProcess.onData((data) => socket.emit('terminal:data', data));
-    // Force tmux redraw by resizing pty to current dimensions (sends SIGWINCH)
+    onDataDisposable = entry.ptyProcess.onData((data) => socket.emit('terminal:data', data));
+
+    // Replay current tmux screen content (with ANSI colors) so reopened terminals aren't blank
+    try {
+      const captured = execSync(
+        `tmux capture-pane -t ${sessionName} -p -e 2>/dev/null`
+      ).toString();
+      if (captured.trim()) socket.emit('terminal:data', captured);
+    } catch {}
+
+    // Force SIGWINCH by toggling size — same-size resize doesn't trigger redraw
     const { cols, rows } = entry.ptyProcess;
-    if (cols > 0 && rows > 0) entry.ptyProcess.resize(cols, rows);
+    if (cols > 1 && rows > 1) {
+      entry.ptyProcess.resize(cols - 1, rows);
+      setTimeout(() => entry.ptyProcess.resize(cols, rows), 50);
+    }
   });
 
   socket.on('terminal:input', (data) => {
@@ -671,6 +689,10 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
+    if (onDataDisposable) {
+      try { onDataDisposable.dispose(); } catch {}
+      onDataDisposable = null;
+    }
     if (currentSession) {
       const entry = ptyManager.sessions.get(currentSession);
       if (entry) entry.clients.delete(socket);

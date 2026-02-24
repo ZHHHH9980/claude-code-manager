@@ -21,7 +21,10 @@ const mockOnDataCallbacks = [];
 const mockPtyProcess = {
   cols: 120,
   rows: 30,
-  onData(cb) { mockOnDataCallbacks.push(cb); },
+  onData(cb) {
+    mockOnDataCallbacks.push(cb);
+    return { dispose: mock.fn() };
+  },
   resize(c, r) { lastResizeCols = c; lastResizeRows = r; },
   write(data) { lastInputData = data; },
 };
@@ -46,6 +49,7 @@ const mockPtyManager = {
 
 // --- Set up socket.io server with terminal handlers (mirrors server/index.js:649-679) ---
 let httpServer, io, serverPort;
+const allClients = [];
 
 function setupServer() {
   return new Promise((resolve) => {
@@ -54,15 +58,24 @@ function setupServer() {
 
     io.on('connection', (socket) => {
       let currentSession = null;
+      let onDataDisposable = null;
 
       socket.on('terminal:attach', (sessionName) => {
+        if (onDataDisposable) {
+          try { onDataDisposable.dispose(); } catch {}
+          onDataDisposable = null;
+        }
         currentSession = sessionName;
         const entry = mockPtyManager.sessions.get(sessionName);
         if (!entry) return socket.emit('terminal:error', 'Session not found');
         entry.clients.add(socket);
-        entry.ptyProcess.onData((data) => socket.emit('terminal:data', data));
+        onDataDisposable = entry.ptyProcess.onData((data) => socket.emit('terminal:data', data));
+        // SIGWINCH toggle
         const { cols, rows } = entry.ptyProcess;
-        if (cols > 0 && rows > 0) entry.ptyProcess.resize(cols, rows);
+        if (cols > 1 && rows > 1) {
+          entry.ptyProcess.resize(cols - 1, rows);
+          setTimeout(() => entry.ptyProcess.resize(cols, rows), 50);
+        }
       });
 
       socket.on('terminal:input', (data) => {
@@ -76,6 +89,10 @@ function setupServer() {
       });
 
       socket.on('disconnect', () => {
+        if (onDataDisposable) {
+          try { onDataDisposable.dispose(); } catch {}
+          onDataDisposable = null;
+        }
         if (currentSession) {
           const entry = mockPtyManager.sessions.get(currentSession);
           if (entry) entry.clients.delete(socket);
@@ -91,9 +108,10 @@ function setupServer() {
 }
 
 function connectClient() {
-  // Dynamic import socket.io-client (installed in client/)
   const { io: ioClient } = require('socket.io-client');
-  return ioClient(`http://localhost:${serverPort}`, { transports: ['websocket'] });
+  const client = ioClient(`http://localhost:${serverPort}`, { transports: ['websocket'], forceNew: true });
+  allClients.push(client);
+  return client;
 }
 
 function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -101,6 +119,7 @@ function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
 describe('terminal socket handlers', () => {
   before(async () => { await setupServer(); });
   after(() => {
+    allClients.forEach(c => { try { c.disconnect(); } catch {} });
     io?.close();
     httpServer?.close();
   });
@@ -176,8 +195,8 @@ describe('terminal socket handlers', () => {
     const client = connectClient();
     await new Promise(r => client.on('connect', r));
     client.emit('terminal:attach', 'test-session');
-    await wait(50);
-    // Reset after attach resize
+    await wait(150);
+    // Reset after attach resize + SIGWINCH toggle completes
     lastResizeCols = null;
     client.emit('terminal:resize', { cols: 0, rows: -1 });
     await wait(50);
@@ -195,5 +214,55 @@ describe('terminal socket handlers', () => {
     client.disconnect();
     await wait(100);
     assert.ok(entry.clients.size < sizeBefore, 'client should be removed on disconnect');
+  });
+
+  // CRITICAL: terminal must show content after close/reopen (modal close = disconnect + reconnect)
+  it('[CRITICAL] re-attach after disconnect still receives pty data', async () => {
+    // First connection — attach and verify data flows
+    const client1 = connectClient();
+    await new Promise(r => client1.on('connect', r));
+    client1.emit('terminal:attach', 'test-session');
+    await wait(100);
+    const cb1 = mockOnDataCallbacks[mockOnDataCallbacks.length - 1];
+    const data1Promise = new Promise(r => client1.on('terminal:data', r));
+    cb1('first session data');
+    const d1 = await data1Promise;
+    assert.equal(d1, 'first session data');
+    // Simulate modal close — client disconnects
+    client1.disconnect();
+    await wait(150);
+
+    // Second connection — simulate modal reopen
+    const client2 = connectClient();
+    await new Promise(r => client2.on('connect', r));
+    const data2Promise = new Promise(r => client2.on('terminal:data', r));
+    client2.emit('terminal:attach', 'test-session');
+    await wait(100);
+    // Simulate pty output after re-attach
+    const cb2 = mockOnDataCallbacks[mockOnDataCallbacks.length - 1];
+    cb2('second session data');
+    const d2 = await data2Promise;
+    assert.equal(d2, 'second session data', 'must receive data after re-attach');
+    client2.disconnect();
+  });
+
+  it('[CRITICAL] SIGWINCH toggle fires on attach (cols-1 then cols)', async () => {
+    lastResizeCols = null;
+    lastResizeRows = null;
+    const resizes = [];
+    const origResize = mockPtyProcess.resize;
+    mockPtyProcess.resize = (c, r) => { resizes.push({ cols: c, rows: r }); origResize(c, r); };
+    const client = connectClient();
+    await new Promise(r => client.on('connect', r));
+    client.emit('terminal:attach', 'test-session');
+    await wait(150); // wait for both resize calls (immediate + 50ms setTimeout)
+    mockPtyProcess.resize = origResize;
+    // Should have at least 2 resizes: cols-1 then cols (SIGWINCH toggle)
+    assert.ok(resizes.length >= 2, `expected >=2 resizes for SIGWINCH toggle, got ${resizes.length}`);
+    const first = resizes[0];
+    const second = resizes[resizes.length - 1];
+    assert.equal(first.cols, 119, 'first resize should be cols-1');
+    assert.equal(second.cols, 120, 'second resize should restore original cols');
+    client.disconnect();
   });
 });

@@ -147,4 +147,76 @@ describe('pty-manager', () => {
     assert.ok(Array.isArray(sessions));
     assert.ok(sessions.includes('test-session'));
   });
+
+  it('createSession sets LANG=en_US.UTF-8 in tmux new-session command', () => {
+    ptyManager.ensureSession('utf8-test', '/tmp');
+    const newSessionCmd = execSyncCalls.find(c => c.includes('new-session'));
+    assert.ok(newSessionCmd, 'should call tmux new-session');
+    assert.ok(newSessionCmd.includes('LANG=en_US.UTF-8'), 'tmux new-session must set UTF-8 locale');
+  });
+
+  it('attachSession passes UTF-8 locale env to pty.spawn', () => {
+    ptyManager.ensureSession('env-test', '/tmp');
+    const ptyMod = require('node-pty');
+    const spawnCall = ptyMod.spawn.mock.calls[0];
+    assert.ok(spawnCall, 'pty.spawn should have been called');
+    const opts = spawnCall.arguments[2];
+    assert.ok(opts.env, 'spawn options must include env');
+    assert.equal(opts.env.LANG, 'en_US.UTF-8', 'LANG must be en_US.UTF-8');
+    assert.equal(opts.env.LC_ALL, 'en_US.UTF-8', 'LC_ALL must be en_US.UTF-8');
+  });
+});
+
+// --- Font / rendering guards (static analysis of Terminal.jsx) ---
+const fs = require('node:fs');
+
+describe('Terminal.jsx font guards', () => {
+  const terminalSrc = fs.readFileSync(
+    path.join(__dirname, '../client/src/components/Terminal.jsx'), 'utf8'
+  );
+
+  // Fonts known to lack CJK glyphs — must never appear in fontFamily
+  const CJK_BROKEN_FONTS = [
+    'Hack Nerd Font',
+    'IBM Plex Mono',
+    'SFMono-Regular',
+    'Fira Code',
+    'JetBrains Mono',
+  ];
+
+  // Extract the full fontFamily value (handles nested quotes like "Courier New")
+  function getFontFamily() {
+    const match = terminalSrc.match(/fontFamily:\s*'([^']+)'/);
+    assert.ok(match, 'Terminal.jsx must define fontFamily');
+    return match[1];
+  }
+
+  it('fontFamily must not contain fonts without CJK support', () => {
+    const fontFamily = getFontFamily();
+    for (const bad of CJK_BROKEN_FONTS) {
+      assert.ok(
+        !fontFamily.includes(bad),
+        `fontFamily must not contain "${bad}" (no CJK glyphs) — found: "${fontFamily}"`
+      );
+    }
+  });
+
+  it('fontFamily must end with generic monospace fallback', () => {
+    const fontFamily = getFontFamily();
+    assert.ok(
+      fontFamily.trim().endsWith('monospace'),
+      `fontFamily must end with "monospace" for CJK fallback — found: "${fontFamily}"`
+    );
+  });
+
+  it('Unicode11Addon must be loaded for CJK double-width support', () => {
+    assert.ok(
+      terminalSrc.includes('Unicode11Addon'),
+      'Terminal.jsx must load Unicode11Addon for CJK double-width characters'
+    );
+    assert.ok(
+      terminalSrc.includes("activeVersion = '11'"),
+      'Terminal.jsx must set unicode.activeVersion to 11'
+    );
+  });
 });
