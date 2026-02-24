@@ -344,6 +344,7 @@ function startClaudeStream({ cwd, message, onProcess, scope, taskId = null, sess
   const startedAtMs = Date.now();
   let firstTokenAtMs = null;
   let chunkCount = 0;
+  let emittedStdoutText = false;
   let doneLogged = false;
 
   function finalize(reason, extra = {}) {
@@ -399,6 +400,7 @@ function startClaudeStream({ cwd, message, onProcess, scope, taskId = null, sess
 
   function emitStreamText(text, extra = {}) {
     if (!text || res.writableEnded) return;
+    if (!extra.stderr) emittedStdoutText = true;
     res.write(`data: ${JSON.stringify({ text, ...extra })}\n\n`);
   }
 
@@ -454,7 +456,7 @@ function startClaudeStream({ cwd, message, onProcess, scope, taskId = null, sess
     finalize(signal ? 'signal_exit' : 'process_exit', { exit_code: code, exit_signal: signal || null });
     if (!res.writableEnded) {
       const isAbnormal = Boolean(signal) || (typeof code === 'number' && code !== 0);
-      if (isAbnormal) {
+      if (isAbnormal && !emittedStdoutText) {
         res.write(`data: ${JSON.stringify({
           error: true,
           error_code: 'PROCESS_EXIT',
@@ -464,7 +466,7 @@ function startClaudeStream({ cwd, message, onProcess, scope, taskId = null, sess
           signal,
         })}\n\n`);
       } else {
-        res.write(`data: ${JSON.stringify({ done: true, code, signal })}\n\n`);
+        res.write(`data: ${JSON.stringify({ done: true, code, signal, degraded: isAbnormal })}\n\n`);
       }
       res.end();
     }
