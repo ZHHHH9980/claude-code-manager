@@ -1,5 +1,6 @@
 const path = require('path');
 const { spawn } = require('child_process');
+const { StringDecoder } = require('string_decoder');
 
 function extractAssistantText(payload) {
   const content = payload?.message?.content;
@@ -19,6 +20,8 @@ class TaskChatRuntime {
     this.logMetric = typeof logMetric === 'function' ? logMetric : () => {};
     this.child = null;
     this.stdoutBuf = '';
+    this.stdoutDecoder = new StringDecoder('utf8');
+    this.stderrDecoder = new StringDecoder('utf8');
     this.closed = false;
     this.queue = Promise.resolve();
     this.pending = null;
@@ -138,7 +141,11 @@ class TaskChatRuntime {
   }
 
   onStdout(chunk) {
-    this.stdoutBuf += chunk.toString();
+    this.consumeStdout(this.stdoutDecoder.write(chunk));
+  }
+
+  consumeStdout(text, { flush = false } = {}) {
+    if (text) this.stdoutBuf += text;
     while (true) {
       const idx = this.stdoutBuf.indexOf('\n');
       if (idx < 0) break;
@@ -153,10 +160,19 @@ class TaskChatRuntime {
       }
       this.handleOutput(payload);
     }
+
+    if (!flush) return;
+    const tail = this.stdoutBuf.trim();
+    this.stdoutBuf = '';
+    if (!tail) return;
+    try {
+      const payload = JSON.parse(tail);
+      this.handleOutput(payload);
+    } catch {}
   }
 
   onStderr(chunk) {
-    const text = chunk.toString().trim();
+    const text = this.stderrDecoder.write(chunk).trim();
     if (!text) return;
     this.logMetric('runtime_stderr', {
       task_id: this.taskId,
@@ -225,6 +241,16 @@ class TaskChatRuntime {
   }
 
   handleRuntimeClose(code, signal) {
+    this.consumeStdout(this.stdoutDecoder.end(), { flush: true });
+    const stderrTail = this.stderrDecoder.end().trim();
+    if (stderrTail) {
+      this.logMetric('runtime_stderr', {
+        task_id: this.taskId,
+        session_id: this.sessionId,
+        text: stderrTail.slice(0, 400),
+      });
+    }
+
     const pending = this.pending;
     if (pending) {
       clearTimeout(pending.timeout);

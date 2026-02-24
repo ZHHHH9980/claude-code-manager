@@ -5,6 +5,7 @@ const { Server } = require('socket.io');
 const path = require('path');
 const { randomUUID } = require('crypto');
 const { execSync, exec, spawn } = require('child_process');
+const { StringDecoder } = require('string_decoder');
 const db = require('./db');
 const { syncTaskToNotion } = require('./notion-sync');
 const ptyManager = require('./pty-manager');
@@ -372,7 +373,7 @@ function startClaudeStream({ cwd, message, onProcess, scope, taskId = null, sess
     prompt_len: String(message || '').length,
   });
 
-  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
   if (typeof res.flushHeaders === 'function') res.flushHeaders();
@@ -391,6 +392,21 @@ function startClaudeStream({ cwd, message, onProcess, scope, taskId = null, sess
   if (onProcess) onProcess(child);
   child.stdin.write(`${message}\n`);
   child.stdin.end();
+  const stdoutDecoder = new StringDecoder('utf8');
+  const stderrDecoder = new StringDecoder('utf8');
+  let decodersFlushed = false;
+
+  function emitStreamText(text, extra = {}) {
+    if (!text || res.writableEnded) return;
+    res.write(`data: ${JSON.stringify({ text, ...extra })}\n\n`);
+  }
+
+  function flushDecoderTails() {
+    if (decodersFlushed) return;
+    decodersFlushed = true;
+    emitStreamText(stdoutDecoder.end());
+    emitStreamText(stderrDecoder.end(), { stderr: true });
+  }
 
   const heartbeat = setInterval(() => {
     if (!res.writableEnded) res.write(': ping\n\n');
@@ -409,14 +425,15 @@ function startClaudeStream({ cwd, message, onProcess, scope, taskId = null, sess
       });
     }
     chunkCount += 1;
-    if (!res.writableEnded) res.write(`data: ${JSON.stringify({ text: chunk.toString() })}\n\n`);
+    emitStreamText(stdoutDecoder.write(chunk));
   });
 
   child.stderr.on('data', (chunk) => {
-    if (!res.writableEnded) res.write(`data: ${JSON.stringify({ text: chunk.toString(), stderr: true })}\n\n`);
+    emitStreamText(stderrDecoder.write(chunk), { stderr: true });
   });
 
   child.on('error', (err) => {
+    flushDecoderTails();
     clearInterval(heartbeat);
     finalize('process_error', { error: err.message, exit_code: null });
     if (!res.writableEnded) {
@@ -431,6 +448,7 @@ function startClaudeStream({ cwd, message, onProcess, scope, taskId = null, sess
   });
 
   child.on('close', (code, signal) => {
+    flushDecoderTails();
     clearInterval(heartbeat);
     finalize(signal ? 'signal_exit' : 'process_exit', { exit_code: code, exit_signal: signal || null });
     if (!res.writableEnded) {
