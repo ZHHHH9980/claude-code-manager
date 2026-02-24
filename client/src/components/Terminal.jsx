@@ -4,6 +4,10 @@ import { FitAddon } from '@xterm/addon-fit';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import '@xterm/xterm/css/xterm.css';
 
+function safeFit(fitAddon) {
+  try { fitAddon.fit(); } catch {}
+}
+
 export function Terminal({ socket, sessionName }) {
   const containerRef = useRef(null);
 
@@ -29,8 +33,6 @@ export function Terminal({ socket, sessionName }) {
       term.unicode.activeVersion = '11';
     } catch {}
     term.open(container);
-    fitAddon.fit();
-    term.focus();
 
     const syncSize = () => {
       socket.emit('terminal:resize', { cols: term.cols, rows: term.rows });
@@ -43,20 +45,26 @@ export function Terminal({ socket, sessionName }) {
     socket.on('terminal:error', onTerminalError);
 
     socket.emit('terminal:attach', sessionName);
-    // Delay resize to force tmux redraw after server sets up onData listener
-    setTimeout(() => syncSize(), 150);
+
+    // Delay fit + resize until container is visible and laid out
+    const initTimer = setTimeout(() => {
+      safeFit(fitAddon);
+      syncSize();
+      term.focus();
+    }, 200);
 
     const inputDisposable = term.onData((data) => socket.emit('terminal:input', data));
     const focusHandler = () => term.focus();
     container.addEventListener('mousedown', focusHandler);
 
     const observer = new ResizeObserver(() => {
-      fitAddon.fit();
+      safeFit(fitAddon);
       syncSize();
     });
     observer.observe(container);
 
     return () => {
+      clearTimeout(initTimer);
       inputDisposable.dispose();
       term.dispose();
       observer.disconnect();
