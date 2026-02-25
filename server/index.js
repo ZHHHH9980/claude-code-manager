@@ -3,6 +3,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
+const fs = require('fs');
 const { randomUUID } = require('crypto');
 const { execSync, exec, spawn } = require('child_process');
 const { StringDecoder } = require('string_decoder');
@@ -13,6 +14,7 @@ const { TaskChatRuntimeManager } = require('./task-chat-runtime');
 const { watchProgress, unwatchProgress } = require('./file-watcher');
 
 const WORKFLOW_DIR = process.env.WORKFLOW_DIR || path.join(process.env.HOME, 'Documents/claude-workflow');
+const SESSIONS_DIR = path.join(__dirname, '../data/sessions');
 
 const app = express();
 const server = http.createServer(app);
@@ -764,8 +766,35 @@ function recoverSessions() {
         if (task.worktree_path) watchProgress(task.worktree_path, task.id);
         console.log(`Recovered session: ${task.pty_session}`);
       } else {
-        db.updateTask(task.id, { status: 'interrupted' });
-        console.log(`Session dead, marked interrupted: ${task.pty_session}`);
+        // Load persisted buffer so the terminal can replay history after restart
+        const bufFile = path.join(SESSIONS_DIR, `${task.pty_session}.buf`);
+        let savedBuffer = '';
+        try { savedBuffer = fs.readFileSync(bufFile, 'utf8'); } catch {}
+
+        try {
+          const entry = ptyManager.ensureSession(task.pty_session, task.worktree_path);
+          if (savedBuffer) {
+            entry.outputBuffer = savedBuffer + '\r\n\x1b[33m[session auto-recovered after server restart]\x1b[0m\r\n';
+          }
+          if (task.worktree_path) watchProgress(task.worktree_path, task.id);
+
+          // Re-launch CC in the new PTY
+          setTimeout(() => {
+            try {
+              if (task.mode === 'ralph') {
+                ptyManager.sendInput(task.pty_session, './ralph.sh --tool claude\n');
+              } else {
+                ptyManager.sendInput(task.pty_session, `claude --model ${task.model || 'claude-sonnet-4-5'} --dangerously-skip-permissions\n`);
+                setTimeout(() => { try { ptyManager.sendInput(task.pty_session, '\n'); } catch {} }, 3000);
+              }
+            } catch {}
+          }, 500);
+
+          console.log(`Auto-restarted session: ${task.pty_session}`);
+        } catch (err) {
+          db.updateTask(task.id, { status: 'interrupted' });
+          console.log(`Failed to restart session, marked interrupted: ${task.pty_session}`);
+        }
       }
     }
   }
@@ -828,6 +857,22 @@ io.on('connection', (socket) => {
     }
     attachedSessions.clear();
   });
+});
+
+// Persist PTY buffers to disk on graceful shutdown so recoverSessions() can
+// replay history after a server restart.
+process.on('SIGTERM', () => {
+  try {
+    fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+    for (const [sessionName, entry] of ptyManager.sessions) {
+      if (entry.outputBuffer) {
+        fs.writeFileSync(path.join(SESSIONS_DIR, `${sessionName}.buf`), entry.outputBuffer);
+      }
+    }
+  } catch (err) {
+    console.error('Failed to persist session buffers:', err?.message);
+  }
+  process.exit(0);
 });
 
 const PORT = process.env.PORT || 3000;
