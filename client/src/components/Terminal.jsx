@@ -76,6 +76,7 @@ export function Terminal({ socket, sessionName }) {
     const initTimer = setTimeout(() => {
       safeFit(fitAddon);
       scheduleSyncSize();
+      term.scrollToBottom();
       term.focus();
     }, 200);
 
