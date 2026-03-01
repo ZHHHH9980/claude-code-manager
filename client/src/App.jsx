@@ -65,6 +65,7 @@ export default function App() {
   const [activeSession, setActiveSession] = useState(null);
   const [activeTaskId, setActiveTaskId] = useState(null);
   const [activeTaskTitle, setActiveTaskTitle] = useState('');
+  const [activeTaskMode, setActiveTaskMode] = useState('');
   const [isTaskTerminalOpen, setIsTaskTerminalOpen] = useState(false);
 
   const { socket } = useSocket();
@@ -163,6 +164,7 @@ export default function App() {
     setActiveSession(savedTask.pty_session);
     setActiveTaskId(savedTask.id);
     setActiveTaskTitle(savedTask.title || savedTask.pty_session);
+    setActiveTaskMode(savedTask.mode || '');
     setIsTaskTerminalOpen(true);
   }, [selectedProject, tasks, activeTaskId, tasksLoaded]);
 
@@ -171,6 +173,7 @@ export default function App() {
     setActiveSession(null);
     setActiveTaskId(null);
     setActiveTaskTitle('');
+    setActiveTaskMode('');
     setIsTaskTerminalOpen(false);
   }
 
@@ -210,6 +213,7 @@ export default function App() {
     setActiveSession(sessionName);
     setActiveTaskId(task.id);
     setActiveTaskTitle(task.title || sessionName);
+    setActiveTaskMode(requestedMode || '');
     setIsTaskTerminalOpen(true);
     refreshAll();
   }
@@ -220,6 +224,7 @@ export default function App() {
     setActiveSession(task.pty_session);
     setActiveTaskId(task.id);
     setActiveTaskTitle(task.title || task.pty_session);
+    setActiveTaskMode(task.mode || '');
     setIsTaskTerminalOpen(true);
   }
 
@@ -453,7 +458,7 @@ export default function App() {
             </div>
 
             <div className="flex-1 min-h-0">
-              <Terminal socket={socket} sessionName={activeSession} />
+              <Terminal socket={socket} sessionName={activeSession} forceRedrawOnAttach={activeTaskMode !== 'codex'} />
             </div>
           </div>
         </div>

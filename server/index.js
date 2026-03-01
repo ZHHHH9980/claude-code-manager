@@ -955,6 +955,9 @@ io.on('connection', (socket) => {
     const replayBuffer = typeof payload === 'object' && typeof payload?.replayBuffer === 'boolean'
       ? payload.replayBuffer
       : true;
+    const forceRedraw = typeof payload === 'object' && typeof payload?.forceRedraw === 'boolean'
+      ? payload.forceRedraw
+      : true;
 
     let entry = ptyManager.sessions.get(sessionName);
     if (!entry && ptyManager.sessionExists(sessionName)) {
@@ -979,11 +982,14 @@ io.on('connection', (socket) => {
       ptyManager.resizeSession(sessionName, initCols, initRows);
     }
 
-    // Force SIGWINCH by toggling size — triggers a full redraw from the terminal app.
-    const { cols, rows } = entry.ptyProcess;
-    if (cols > 1 && rows > 1) {
-      entry.ptyProcess.resize(cols - 1, rows);
-      setTimeout(() => entry.ptyProcess.resize(cols, rows), 50);
+    // Optional SIGWINCH toggle. Some CLIs (Codex) can duplicate prompt blocks on
+    // forced redraw, so client can disable this per attach.
+    if (forceRedraw) {
+      const { cols, rows } = entry.ptyProcess;
+      if (cols > 1 && rows > 1) {
+        entry.ptyProcess.resize(cols - 1, rows);
+        setTimeout(() => entry.ptyProcess.resize(cols, rows), 50);
+      }
     }
   });
 

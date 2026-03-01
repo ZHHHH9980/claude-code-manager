@@ -8,7 +8,7 @@ function safeFit(fitAddon) {
   try { fitAddon.fit(); } catch {}
 }
 
-export function Terminal({ socket, sessionName, replayOnAttach = true }) {
+export function Terminal({ socket, sessionName, replayOnAttach = true, forceRedrawOnAttach = true }) {
   const containerRef = useRef(null);
   const lastSizeRef = useRef({ cols: 0, rows: 0 });
   const resizeTimerRef = useRef(null);
@@ -74,6 +74,7 @@ export function Terminal({ socket, sessionName, replayOnAttach = true }) {
       cols: term.cols,
       rows: term.rows,
       replayBuffer: Boolean(replayOnAttach),
+      forceRedraw: Boolean(forceRedrawOnAttach),
     });
     scheduleSyncSize(true);
 
@@ -108,7 +109,7 @@ export function Terminal({ socket, sessionName, replayOnAttach = true }) {
       socket.off('terminal:error', onTerminalError);
       container.removeEventListener('mousedown', focusHandler);
     };
-  }, [socket, sessionName, replayOnAttach]);
+  }, [socket, sessionName, replayOnAttach, forceRedrawOnAttach]);
 
   return <div ref={containerRef} className="w-full h-full terminal-host" style={{ overflow: 'hidden' }} />;
 }

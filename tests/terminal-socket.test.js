@@ -71,6 +71,9 @@ function setupServer() {
         const replayBuffer = typeof payload === 'object' && typeof payload?.replayBuffer === 'boolean'
           ? payload.replayBuffer
           : true;
+        const forceRedraw = typeof payload === 'object' && typeof payload?.forceRedraw === 'boolean'
+          ? payload.forceRedraw
+          : true;
 
         const entry = mockPtyManager.sessions.get(sessionName);
         if (!entry) return socket.emit('terminal:error', 'Session not found');
@@ -87,10 +90,12 @@ function setupServer() {
           mockPtyManager.resizeSession(sessionName, initCols, initRows);
         }
         // SIGWINCH toggle
-        const { cols, rows } = entry.ptyProcess;
-        if (cols > 1 && rows > 1) {
-          entry.ptyProcess.resize(cols - 1, rows);
-          setTimeout(() => entry.ptyProcess.resize(cols, rows), 50);
+        if (forceRedraw) {
+          const { cols, rows } = entry.ptyProcess;
+          if (cols > 1 && rows > 1) {
+            entry.ptyProcess.resize(cols - 1, rows);
+            setTimeout(() => entry.ptyProcess.resize(cols, rows), 50);
+          }
         }
       });
 
@@ -348,5 +353,23 @@ describe('terminal socket handlers', () => {
     client.disconnect();
 
     assert.equal(received.some(d => d.includes('history line 1')), false, `should not replay history: ${JSON.stringify(received)}`);
+  });
+
+  it('terminal:attach supports forceRedraw=false to skip SIGWINCH toggle', async () => {
+    // Reset to known initial size
+    mockPtyProcess.cols = 120;
+    mockPtyProcess.rows = 30;
+    const resizes = [];
+    const origResize = mockPtyProcess.resize.bind(mockPtyProcess);
+    mockPtyProcess.resize = (c, r) => { resizes.push({ cols: c, rows: r }); origResize(c, r); };
+
+    const client = connectClient();
+    await new Promise(r => client.on('connect', r));
+    client.emit('terminal:attach', { sessionName: 'test-session', forceRedraw: false });
+    await wait(150);
+    mockPtyProcess.resize = origResize;
+    client.disconnect();
+
+    assert.equal(resizes.length, 0, `expected no resize when forceRedraw=false, got ${JSON.stringify(resizes)}`);
   });
 });
