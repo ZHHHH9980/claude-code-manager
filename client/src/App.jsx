@@ -7,6 +7,19 @@ import { API_BASE_URL } from './config';
 
 const STORAGE_SELECTED_PROJECT_ID = 'ccm-selected-project-id';
 const STORAGE_ACTIVE_TASK_ID = 'ccm-active-task-id';
+const STORAGE_AGENT_TERMINAL_MODE = 'ccm-agent-terminal-mode';
+const AGENT_TERMINAL_MODES = [
+  { id: 'claude', label: 'Claude Code', badge: 'CC', color: '#d97757' },
+  { id: 'codex', label: 'Codex', badge: 'CX', color: '#10a37f' },
+];
+
+function isValidAgentMode(mode) {
+  return AGENT_TERMINAL_MODES.some((item) => item.id === mode);
+}
+
+function getAgentModeMeta(mode) {
+  return AGENT_TERMINAL_MODES.find((item) => item.id === mode) || AGENT_TERMINAL_MODES[0];
+}
 
 export default function App() {
   const [projects, setProjects] = useState([]);
@@ -20,6 +33,11 @@ export default function App() {
   const { socket } = useSocket();
   const [agentTerminalSession, setAgentTerminalSession] = useState(null);
   const [agentTerminalReady, setAgentTerminalReady] = useState(false);
+  const [agentTerminalMode, setAgentTerminalMode] = useState(() => {
+    const saved = localStorage.getItem(STORAGE_AGENT_TERMINAL_MODE);
+    return isValidAgentMode(saved) ? saved : 'claude';
+  });
+  const [agentTerminalError, setAgentTerminalError] = useState('');
 
   const [theme, setTheme] = useState(() => {
     const saved = localStorage.getItem('ccm-theme');
@@ -33,6 +51,10 @@ export default function App() {
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem('ccm-theme', theme);
   }, [theme]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_AGENT_TERMINAL_MODE, agentTerminalMode);
+  }, [agentTerminalMode]);
 
   useEffect(() => {
     fetch(`${API_BASE_URL}/api/projects`).then((r) => r.json()).then(setProjects);
@@ -149,20 +171,58 @@ export default function App() {
     refreshAll();
   }
 
-  async function startMainAgentTerminal() {
+  async function startMainAgentTerminal(mode = agentTerminalMode, { suppressError = false } = {}) {
+    const safeMode = isValidAgentMode(mode) ? mode : 'claude';
     setAgentTerminalReady(false);
+    if (!suppressError) setAgentTerminalError('');
     try {
-      const res = await fetch(`${API_BASE_URL}/api/agent/terminal/start`, { method: 'POST' });
+      const res = await fetch(`${API_BASE_URL}/api/agent/terminal/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: safeMode }),
+      });
       const payload = await res.json();
-      if (payload?.sessionName) setAgentTerminalSession(payload.sessionName);
-    } catch {}
-    setAgentTerminalReady(true);
+      if (!res.ok || payload?.ptyOk === false || !payload?.sessionName) {
+        throw new Error(payload?.error || `failed to start ${safeMode}`);
+      }
+      setAgentTerminalSession(payload.sessionName);
+      setAgentTerminalMode(isValidAgentMode(payload.mode) ? payload.mode : safeMode);
+      return true;
+    } catch (err) {
+      setAgentTerminalSession(null);
+      if (!suppressError) {
+        setAgentTerminalError(err?.message || `failed to start ${safeMode}`);
+      }
+      return false;
+    } finally {
+      setAgentTerminalReady(true);
+    }
   }
 
   async function restartMainAgentTerminal() {
     setAgentTerminalReady(false);
+    setAgentTerminalError('');
     try { await fetch(`${API_BASE_URL}/api/agent/terminal/stop`, { method: 'POST' }); } catch {}
-    await startMainAgentTerminal();
+    await startMainAgentTerminal(agentTerminalMode);
+  }
+
+  async function switchMainAgentTerminal(nextMode) {
+    if (!isValidAgentMode(nextMode) || nextMode === agentTerminalMode) return;
+    const prevMode = agentTerminalMode;
+
+    setAgentTerminalReady(false);
+    setAgentTerminalError('');
+    try { await fetch(`${API_BASE_URL}/api/agent/terminal/stop`, { method: 'POST' }); } catch {}
+
+    const switched = await startMainAgentTerminal(nextMode, { suppressError: true });
+    if (switched) return;
+
+    const rolledBack = await startMainAgentTerminal(prevMode, { suppressError: true });
+    if (rolledBack) {
+      setAgentTerminalError(`Failed to start ${nextMode}, reverted to ${prevMode}.`);
+    } else {
+      setAgentTerminalError(`Failed to start ${nextMode}, and rollback to ${prevMode} also failed.`);
+    }
   }
 
   useEffect(() => {
@@ -174,8 +234,11 @@ export default function App() {
   }, [tasks, activeSession, activeTaskId, tasksLoaded]);
 
   useEffect(() => {
-    startMainAgentTerminal();
+    startMainAgentTerminal(agentTerminalMode);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const currentAgentMode = getAgentModeMeta(agentTerminalMode);
 
   useEffect(() => {
     const media = window.matchMedia?.('(max-width: 767px)');
@@ -199,20 +262,32 @@ export default function App() {
           <span
             aria-hidden
             className="inline-flex items-center justify-center w-5 h-5 rounded-md text-[10px] font-semibold shrink-0"
-            style={{ background: '#d97757', color: '#fff' }}
+            style={{ background: currentAgentMode.color, color: '#fff' }}
           >
-            CC
+            {currentAgentMode.badge}
           </span>
           <span className="truncate">CCM Agent Terminal</span>
         </div>
-        <button type="button" onClick={restartMainAgentTerminal} className="ccm-button ccm-button-soft text-xs px-2 py-0.5">Restart</button>
+        <div className="flex items-center gap-2">
+          <select
+            value={agentTerminalMode}
+            onChange={(e) => switchMainAgentTerminal(e.target.value)}
+            className="ccm-button ccm-button-soft text-xs px-2 py-0.5"
+            aria-label="Switch agent terminal adapter"
+          >
+            {AGENT_TERMINAL_MODES.map((item) => (
+              <option key={item.id} value={item.id}>{item.label}</option>
+            ))}
+          </select>
+          <button type="button" onClick={restartMainAgentTerminal} className="ccm-button ccm-button-soft text-xs px-2 py-0.5">Restart</button>
+        </div>
       </div>
       <div className="flex-1 min-h-0">
         {agentTerminalReady && agentTerminalSession && socket ? (
           <Terminal socket={socket} sessionName={agentTerminalSession} />
         ) : (
           <div className="h-full w-full flex items-center justify-center text-xs" style={{ color: 'var(--text-3)' }}>
-            Starting agent terminal...
+            {agentTerminalError || 'Starting agent terminal...'}
           </div>
         )}
       </div>

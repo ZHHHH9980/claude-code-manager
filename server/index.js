@@ -549,10 +549,60 @@ function resetAgentChat(reason = 'agent_reset') {
 }
 
 const AGENT_TERMINAL_SESSION = process.env.AGENT_TERMINAL_SESSION || 'claude-agent-home';
+const AGENT_TERMINAL_MODES = {
+  claude: {
+    cli: 'claude',
+    command: 'claude --model claude-sonnet-4-5 --dangerously-skip-permissions',
+    autoConfirm: true,
+  },
+  codex: {
+    cli: 'codex',
+    command: 'codex --model gpt-5-codex --full-auto',
+    autoConfirm: false,
+  },
+};
 
-function startAgentTerminalSession() {
+function resolveAgentTerminalMode(mode) {
+  const normalized = String(mode || '').trim().toLowerCase() || 'claude';
+  const config = AGENT_TERMINAL_MODES[normalized];
+  if (!config) return null;
+  return { mode: normalized, ...config };
+}
+
+function isCommandAvailable(cmd) {
+  const safe = String(cmd || '').trim();
+  if (!safe || !/^[a-zA-Z0-9._-]+$/.test(safe)) return false;
+  try {
+    execSync(`bash -lc "command -v ${safe}"`, { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function startAgentTerminalSession(mode = 'claude') {
+  const selected = resolveAgentTerminalMode(mode);
+  if (!selected) {
+    return {
+      sessionName: AGENT_TERMINAL_SESSION,
+      ptyOk: false,
+      mode: 'claude',
+      error: `unsupported agent terminal mode: ${mode}`,
+    };
+  }
+
+  if (!isCommandAvailable(selected.cli)) {
+    return {
+      sessionName: AGENT_TERMINAL_SESSION,
+      ptyOk: false,
+      mode: selected.mode,
+      error: `CLI not found: ${selected.cli}`,
+    };
+  }
+
   const cwd = path.join(__dirname, '..');
   let ptyOk = true;
+  let error = null;
   try {
     const existed = ptyManager.sessionExists(AGENT_TERMINAL_SESSION);
     ptyManager.ensureSession(AGENT_TERMINAL_SESSION, cwd);
@@ -560,20 +610,27 @@ function startAgentTerminalSession() {
       setTimeout(() => {
         try {
           ptyManager.sendInput(AGENT_TERMINAL_SESSION, 'export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 LC_CTYPE=en_US.UTF-8\n');
-          ptyManager.sendInput(AGENT_TERMINAL_SESSION, 'claude --model claude-sonnet-4-5 --dangerously-skip-permissions\n');
-          setTimeout(() => { try { ptyManager.sendInput(AGENT_TERMINAL_SESSION, '\n'); } catch {} }, 3000);
+          ptyManager.sendInput(AGENT_TERMINAL_SESSION, `${selected.command}\n`);
+          if (selected.autoConfirm) {
+            setTimeout(() => { try { ptyManager.sendInput(AGENT_TERMINAL_SESSION, '\n'); } catch {} }, 3000);
+          }
         } catch (err) {
+          ptyOk = false;
+          error = err?.message || String(err);
           console.warn('agent terminal sendInput failed:', err?.message || err);
         }
       }, 500);
     }
   } catch (err) {
     ptyOk = false;
+    error = err?.message || String(err);
     console.warn('agent terminal unavailable:', err?.message || err);
   }
   return {
     sessionName: AGENT_TERMINAL_SESSION,
     ptyOk,
+    mode: selected.mode,
+    error,
   };
 }
 
@@ -588,7 +645,7 @@ app.delete('/api/agent/history', (req, res) => {
 });
 
 app.post('/api/agent/terminal/start', (req, res) => {
-  const payload = startAgentTerminalSession();
+  const payload = startAgentTerminalSession(req.body?.mode);
   res.json(payload);
 });
 
