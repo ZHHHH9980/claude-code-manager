@@ -179,6 +179,8 @@ export default function App() {
   }
 
   async function handleStartTask(task, mode) {
+    const requestedMode = mode || (adapters[0] || DEFAULT_ADAPTERS[0]).name;
+    const requestedLabel = adapters.find((item) => item.name === requestedMode)?.label || requestedMode;
     const res = await fetch(`${API_BASE_URL}/api/tasks/${task.id}/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -186,10 +188,17 @@ export default function App() {
         worktreePath: task.worktree_path || selectedProject?.repo_path,
         branch: task.branch || 'main',
         model: task.model,
-        mode: mode || (adapters[0] || DEFAULT_ADAPTERS[0]).name,
+        mode: requestedMode,
       }),
     });
-    const { sessionName } = await res.json();
+    let payload = {};
+    try { payload = await res.json(); } catch {}
+    if (!res.ok || payload?.ptyOk === false || !payload?.sessionName) {
+      window.alert(`Failed to start ${requestedLabel}: ${payload?.error || 'unknown error'}`);
+      refreshAll();
+      return;
+    }
+    const { sessionName } = payload;
     localStorage.setItem(STORAGE_ACTIVE_TASK_ID, String(task.id));
     setActiveSession(sessionName);
     setActiveTaskId(task.id);

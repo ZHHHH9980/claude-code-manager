@@ -3,7 +3,7 @@ module.exports = {
   label: 'Codex',
   color: '#10a37f',
   cli: 'codex',
-  defaultArgs: ['--full-auto'],
+  defaultArgs: ['--dangerously-bypass-approvals-and-sandbox'],
   models: [
     { id: 'gpt-5.3-codex', label: 'GPT-5.3-Codex' },
     { id: 'gpt-5.3-codex-spark', label: 'GPT-5.3-Codex-Spark' },

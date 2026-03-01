@@ -131,6 +131,16 @@ app.post('/api/tasks/:id/start', (req, res) => {
   const safeTaskId = String(id).replace(/[^a-zA-Z0-9_-]/g, '').slice(-24) || 'task';
   const sessionName = `claude-task-${safeTaskId}`;
 
+  if (!isCommandAvailable(adapter.cli)) {
+    return res.status(400).json({
+      sessionName,
+      ptyOk: false,
+      mode: adapter.name,
+      model: finalModel,
+      error: `CLI not found: ${adapter.cli}`,
+    });
+  }
+
   const task = db.updateTask(id, {
     status: 'in_progress',
     worktreePath,
@@ -151,22 +161,19 @@ app.post('/api/tasks/:id/start', (req, res) => {
   let error = null;
   try {
     const existed = ptyManager.sessionExists(sessionName);
-    ptyManager.ensureSession(sessionName, worktreePath);
-    if (!existed && !isCommandAvailable(adapter.cli)) {
-      ptyOk = false;
-      error = `CLI not found: ${adapter.cli}`;
-      console.warn(`task ${id} launch skipped: ${error}`);
-    } else if (!existed) {
-      setTimeout(() => {
-        try {
-          launchAdapterInSession(sessionName, { adapter, model: finalModel, context: `start task ${id}` });
-        } catch (err) {
-          ptyOk = false;
-          error = err?.message || String(err);
-          console.warn(`pty sendInput failed for task ${id}:`, err?.message || err);
-        }
-      }, 500);
+    if (existed) {
+      ptyManager.killSession(sessionName);
     }
+    ptyManager.ensureSession(sessionName, worktreePath);
+    setTimeout(() => {
+      try {
+        launchAdapterInSession(sessionName, { adapter, model: finalModel, context: `start task ${id}` });
+      } catch (err) {
+        ptyOk = false;
+        error = err?.message || String(err);
+        console.warn(`pty sendInput failed for task ${id}:`, err?.message || err);
+      }
+    }, 500);
   } catch (err) {
     ptyOk = false;
     error = err?.message || String(err);
