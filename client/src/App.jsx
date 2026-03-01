@@ -8,17 +8,53 @@ import { API_BASE_URL } from './config';
 const STORAGE_SELECTED_PROJECT_ID = 'ccm-selected-project-id';
 const STORAGE_ACTIVE_TASK_ID = 'ccm-active-task-id';
 const STORAGE_AGENT_TERMINAL_MODE = 'ccm-agent-terminal-mode';
-const AGENT_TERMINAL_MODES = [
-  { id: 'claude', label: 'Claude Code', badge: 'CC', color: '#d97757' },
-  { id: 'codex', label: 'Codex', badge: 'CX', color: '#10a37f' },
+const DEFAULT_ADAPTERS = [
+  {
+    name: 'claude',
+    label: 'Claude Code',
+    color: '#d97757',
+    models: [{ id: 'claude-sonnet-4-5', label: 'Sonnet 4.5' }],
+    defaultModel: 'claude-sonnet-4-5',
+    supportsChatMode: true,
+  },
+  {
+    name: 'codex',
+    label: 'Codex',
+    color: '#10a37f',
+    models: [{ id: 'gpt-5.3-codex', label: 'GPT-5.3-Codex' }],
+    defaultModel: 'gpt-5.3-codex',
+    supportsChatMode: false,
+  },
 ];
 
-function isValidAgentMode(mode) {
-  return AGENT_TERMINAL_MODES.some((item) => item.id === mode);
+function modeBadge(name, label) {
+  if (name === 'claude') return 'CC';
+  if (name === 'codex') return 'CX';
+  const words = String(label || name || '')
+    .split(/[\s_-]+/)
+    .filter(Boolean);
+  const badge = words.map((item) => item[0]).join('').slice(0, 2).toUpperCase();
+  return badge || String(name || 'AG').slice(0, 2).toUpperCase();
 }
 
-function getAgentModeMeta(mode) {
-  return AGENT_TERMINAL_MODES.find((item) => item.id === mode) || AGENT_TERMINAL_MODES[0];
+function normalizeAdapter(adapter) {
+  if (!adapter || !adapter.name) return null;
+  return {
+    name: String(adapter.name).toLowerCase(),
+    label: adapter.label || adapter.name,
+    color: adapter.color || '#64748b',
+    models: Array.isArray(adapter.models) ? adapter.models : [],
+    defaultModel: adapter.defaultModel || null,
+    supportsChatMode: Boolean(adapter.supportsChatMode),
+  };
+}
+
+function isValidAgentMode(mode, adapters) {
+  return adapters.some((item) => item.name === mode);
+}
+
+function getAgentModeMeta(mode, adapters) {
+  return adapters.find((item) => item.name === mode) || adapters[0] || DEFAULT_ADAPTERS[0];
 }
 
 export default function App() {
@@ -33,9 +69,10 @@ export default function App() {
   const { socket } = useSocket();
   const [agentTerminalSession, setAgentTerminalSession] = useState(null);
   const [agentTerminalReady, setAgentTerminalReady] = useState(false);
+  const [adapters, setAdapters] = useState(DEFAULT_ADAPTERS);
   const [agentTerminalMode, setAgentTerminalMode] = useState(() => {
     const saved = localStorage.getItem(STORAGE_AGENT_TERMINAL_MODE);
-    return isValidAgentMode(saved) ? saved : 'claude';
+    return saved || 'claude';
   });
   const [agentTerminalError, setAgentTerminalError] = useState('');
 
@@ -59,6 +96,22 @@ export default function App() {
   useEffect(() => {
     fetch(`${API_BASE_URL}/api/projects`).then((r) => r.json()).then(setProjects);
   }, []);
+
+  useEffect(() => {
+    fetch(`${API_BASE_URL}/api/adapters`)
+      .then((r) => r.json())
+      .then((rows) => {
+        if (!Array.isArray(rows) || rows.length === 0) return;
+        const normalized = rows.map(normalizeAdapter).filter(Boolean);
+        if (normalized.length > 0) setAdapters(normalized);
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (isValidAgentMode(agentTerminalMode, adapters)) return;
+    setAgentTerminalMode((adapters[0] || DEFAULT_ADAPTERS[0]).name);
+  }, [agentTerminalMode, adapters]);
 
   useEffect(() => {
     if (selectedProject) return;
@@ -133,7 +186,7 @@ export default function App() {
         worktreePath: task.worktree_path || selectedProject?.repo_path,
         branch: task.branch || 'main',
         model: task.model,
-        mode: mode || 'claude',
+        mode: mode || (adapters[0] || DEFAULT_ADAPTERS[0]).name,
       }),
     });
     const { sessionName } = await res.json();
@@ -172,7 +225,7 @@ export default function App() {
   }
 
   async function startMainAgentTerminal(mode = agentTerminalMode, { suppressError = false } = {}) {
-    const safeMode = isValidAgentMode(mode) ? mode : 'claude';
+    const safeMode = isValidAgentMode(mode, adapters) ? mode : (adapters[0] || DEFAULT_ADAPTERS[0]).name;
     setAgentTerminalReady(false);
     if (!suppressError) setAgentTerminalError('');
     try {
@@ -186,7 +239,7 @@ export default function App() {
         throw new Error(payload?.error || `failed to start ${safeMode}`);
       }
       setAgentTerminalSession(payload.sessionName);
-      setAgentTerminalMode(isValidAgentMode(payload.mode) ? payload.mode : safeMode);
+      setAgentTerminalMode(isValidAgentMode(payload.mode, adapters) ? payload.mode : safeMode);
       return true;
     } catch (err) {
       setAgentTerminalSession(null);
@@ -207,7 +260,7 @@ export default function App() {
   }
 
   async function switchMainAgentTerminal(nextMode) {
-    if (!isValidAgentMode(nextMode) || nextMode === agentTerminalMode) return;
+    if (!isValidAgentMode(nextMode, adapters) || nextMode === agentTerminalMode) return;
     const prevMode = agentTerminalMode;
 
     setAgentTerminalReady(false);
@@ -238,7 +291,7 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const currentAgentMode = getAgentModeMeta(agentTerminalMode);
+  const currentAgentMode = getAgentModeMeta(agentTerminalMode, adapters);
 
   useEffect(() => {
     const media = window.matchMedia?.('(max-width: 767px)');
@@ -264,7 +317,7 @@ export default function App() {
             className="inline-flex items-center justify-center w-5 h-5 rounded-md text-[10px] font-semibold shrink-0"
             style={{ background: currentAgentMode.color, color: '#fff' }}
           >
-            {currentAgentMode.badge}
+            {modeBadge(currentAgentMode.name, currentAgentMode.label)}
           </span>
           <span className="truncate">CCM Agent Terminal</span>
         </div>
@@ -275,8 +328,8 @@ export default function App() {
             className="ccm-button ccm-button-soft text-xs px-2 py-0.5"
             aria-label="Switch agent terminal adapter"
           >
-            {AGENT_TERMINAL_MODES.map((item) => (
-              <option key={item.id} value={item.id}>{item.label}</option>
+            {adapters.map((item) => (
+              <option key={item.name} value={item.name}>{item.label}</option>
             ))}
           </select>
           <button type="button" onClick={restartMainAgentTerminal} className="ccm-button ccm-button-soft text-xs px-2 py-0.5">Restart</button>
@@ -345,7 +398,7 @@ export default function App() {
                 <ProjectList projects={projects} selectedId={selectedProject?.id} onSelect={setSelectedProject} mobile />
               )}
               {mobilePane === 'tasks' && (
-                <TaskBoard tasks={tasks} onOpenTerminal={handleOpenTask} onStartTask={handleStartTask} onDeleteTask={handleDeleteTask} onCreateTask={handleCreateTask} mobile />
+                <TaskBoard tasks={tasks} adapters={adapters} onOpenTerminal={handleOpenTask} onStartTask={handleStartTask} onDeleteTask={handleDeleteTask} onCreateTask={handleCreateTask} mobile />
               )}
               {mobilePane === 'chat' && mainChatPanel}
             </div>
@@ -354,7 +407,7 @@ export default function App() {
           <>
             <ProjectList projects={projects} selectedId={selectedProject?.id} onSelect={setSelectedProject} />
             <div className="flex flex-col flex-1 min-w-0 min-h-0">
-              <TaskBoard tasks={tasks} onOpenTerminal={handleOpenTask} onStartTask={handleStartTask} onDeleteTask={handleDeleteTask} onCreateTask={handleCreateTask} />
+              <TaskBoard tasks={tasks} adapters={adapters} onOpenTerminal={handleOpenTask} onStartTask={handleStartTask} onDeleteTask={handleDeleteTask} onCreateTask={handleCreateTask} />
               {mainChatPanel}
             </div>
           </>

@@ -12,9 +12,24 @@ function statusStyle(status) {
   return STATUS_STYLE[status] || { color: 'var(--text-3)', label: status || 'unknown' };
 }
 
-export function TaskBoard({ tasks, onOpenTerminal, onStartTask, onDeleteTask, onCreateTask, mobile = false }) {
+function modeBadge(name, label) {
+  if (name === 'claude') return 'CC';
+  if (name === 'codex') return 'CX';
+  const words = String(label || name || '')
+    .split(/[\s_-]+/)
+    .filter(Boolean);
+  const badge = words.map((item) => item[0]).join('').slice(0, 2).toUpperCase();
+  return badge || String(name || 'AG').slice(0, 2).toUpperCase();
+}
+
+export function TaskBoard({ tasks, adapters = [], onOpenTerminal, onStartTask, onDeleteTask, onCreateTask, mobile = false }) {
   const [showForm, setShowForm] = useState(false);
   const [newTitle, setNewTitle] = useState('');
+  const availableAdapters = adapters.length > 0 ? adapters : [
+    { name: 'claude', label: 'Claude Code', color: '#d97757' },
+    { name: 'codex', label: 'Codex', color: '#10a37f' },
+  ];
+  const adapterMap = new Map(availableAdapters.map((adapter) => [String(adapter.name).toLowerCase(), adapter]));
 
   function handleSubmit(e) {
     e.preventDefault();
@@ -94,6 +109,24 @@ export function TaskBoard({ tasks, onOpenTerminal, onStartTask, onDeleteTask, on
                 <span className={`text-xs truncate ${mobile ? 'max-w-full' : 'max-w-36'}`} style={{ color: 'var(--text-3)' }}>{task.branch || '-'}</span>
 
                 {task.status === 'in_progress' && (
+                  (() => {
+                    const current = adapterMap.get(String(task.mode || '').toLowerCase());
+                    const modeName = String(task.mode || '').toLowerCase();
+                    const label = current?.label || (modeName || 'unknown');
+                    const color = current?.color || '#64748b';
+                    return (
+                      <span
+                        className="text-[11px] uppercase tracking-wide px-2 py-0.5 rounded-full"
+                        style={{ color: '#fff', background: color }}
+                        title={`Adapter: ${label}`}
+                      >
+                        {modeBadge(modeName, label)}
+                      </span>
+                    );
+                  })()
+                )}
+
+                {task.status === 'in_progress' && (
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
@@ -120,32 +153,22 @@ export function TaskBoard({ tasks, onOpenTerminal, onStartTask, onDeleteTask, on
 
                 {task.status === 'pending' && (
                   <div className={`flex gap-1.5 ${mobile ? 'w-full' : ''}`}>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onStartTask(task, 'claude');
-                      }}
-                      className={`ccm-button text-xs px-2.5 py-1.5 ${mobile ? 'flex-1' : ''}`}
-                      style={{
-                        color: '#fff',
-                        background: 'linear-gradient(135deg, var(--accent-2), color-mix(in srgb, var(--accent-2) 75%, #fff 25%))',
-                      }}
-                    >
-                      Claude
-                    </button>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onStartTask(task, 'ralph');
-                      }}
-                      className={`ccm-button text-xs px-2.5 py-1.5 ${mobile ? 'flex-1' : ''}`}
-                      style={{
-                        color: '#fff',
-                        background: 'linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 70%, #fff 30%))',
-                      }}
-                    >
-                      Ralph
-                    </button>
+                    {availableAdapters.map((adapter) => (
+                      <button
+                        key={adapter.name}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onStartTask(task, adapter.name);
+                        }}
+                        className={`ccm-button text-xs px-2.5 py-1.5 ${mobile ? 'flex-1' : ''}`}
+                        style={{
+                          color: '#fff',
+                          background: `linear-gradient(135deg, ${adapter.color || '#64748b'}, color-mix(in srgb, ${adapter.color || '#64748b'} 72%, #fff 28%))`,
+                        }}
+                      >
+                        {adapter.label || adapter.name}
+                      </button>
+                    ))}
                   </div>
                 )}
               </div>
