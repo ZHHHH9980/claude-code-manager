@@ -7,6 +7,7 @@ import {
   MessageInput,
   TypingIndicator,
 } from '@chatscope/chat-ui-kit-react';
+import { API_BASE_URL } from '../config';
 
 function getStatusLabel(phase) {
   if (phase === 'streaming') return 'Receiving response...';

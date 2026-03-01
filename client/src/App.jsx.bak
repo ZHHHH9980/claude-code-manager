@@ -58,7 +58,7 @@ export default function App() {
     }
     setTasksLoaded(false);
     localStorage.setItem(STORAGE_SELECTED_PROJECT_ID, String(selectedProject.id));
-    fetch(`${API_BASE_URL}/api/tasks?projectId=${selectedProject.id}`)
+    fetch(`/api/tasks?projectId=${selectedProject.id}`)
       .then((r) => r.json())
       .then((rows) => {
         setTasks(Array.isArray(rows) ? rows : []);
@@ -97,14 +97,14 @@ export default function App() {
   }
 
   function refreshAll() {
-    fetch(`${API_BASE_URL}/api/projects`).then((r) => r.json()).then(setProjects);
+    fetch('/api/projects').then((r) => r.json()).then(setProjects);
     if (selectedProject) {
-      fetch(`${API_BASE_URL}/api/tasks?projectId=${selectedProject.id}`).then((r) => r.json()).then(setTasks);
+      fetch(`/api/tasks?projectId=${selectedProject.id}`).then((r) => r.json()).then(setTasks);
     }
   }
 
   async function handleStartTask(task, mode) {
-    const res = await fetch(`${API_BASE_URL}/api/tasks/${task.id}/start`, {
+    const res = await fetch(`/api/tasks/${task.id}/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -134,14 +134,14 @@ export default function App() {
     if (!task?.id) return;
     const yes = window.confirm(`Delete task "${task.title}"? This will stop its runtime and remove chat history.`);
     if (!yes) return;
-    await fetch(`${API_BASE_URL}/api/tasks/${task.id}`, { method: 'DELETE' });
+    await fetch(`/api/tasks/${task.id}`, { method: 'DELETE' });
     if (String(activeTaskId) === String(task.id)) closeActiveTaskChat();
     refreshAll();
   }
 
   async function handleCreateTask({ title }) {
     if (!selectedProject || !title) return;
-    await fetch(`${API_BASE_URL}/api/tasks`, {
+    await fetch('/api/tasks', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title, projectId: selectedProject.id, branch: 'main' }),
@@ -152,7 +152,7 @@ export default function App() {
   async function startMainAgentTerminal() {
     setAgentTerminalReady(false);
     try {
-      const res = await fetch(`${API_BASE_URL}/api/agent/terminal/start`, { method: 'POST' });
+      const res = await fetch('/api/agent/terminal/start', { method: 'POST' });
       const payload = await res.json();
       if (payload?.sessionName) setAgentTerminalSession(payload.sessionName);
     } catch {}
@@ -161,7 +161,7 @@ export default function App() {
 
   async function restartMainAgentTerminal() {
     setAgentTerminalReady(false);
-    try { await fetch(`${API_BASE_URL}/api/agent/terminal/stop`, { method: 'POST' }); } catch {}
+    try { await fetch('/api/agent/terminal/stop', { method: 'POST' }); } catch {}
     await startMainAgentTerminal();
   }
 

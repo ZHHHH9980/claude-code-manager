@@ -2,13 +2,14 @@
 
 ## 系统概述
 
-Claude Code Manager 是一个任务管理系统，用于管理和监控 Claude Code 任务的执行。系统采用**单体架构**（前后端同一进程），使用 WebSocket 进行实时通信，PTY（伪终端）管理任务进程。
+Claude Code Manager 是一个任务管理系统，用于管理和监控 Claude Code 任务的执行。系统采用**前后端分离架构**，使用 WebSocket 进行实时通信，PTY（伪终端）管理任务进程。
 
 **关键架构特点**：
-- Express 服务器同时提供 REST API 和静态文件服务（`client/dist`）
-- 前后端在同一个 Node.js 进程中运行
-- PM2 重启时，整个服务器进程重启，但浏览器中的 React 应用不会刷新
-- Socket.io 连接会断开并自动重连，但需要应用层处理重连后的状态恢复
+- 前端静态文件服务（端口 8080）和后端 API 服务（端口 3000）独立运行
+- 两个服务由 PM2 分别管理（claude-manager-static 和 claude-manager-api）
+- PM2 重启后端时，前端服务保持可用，用户体验不受影响
+- Socket.io 连接会断开并自动重连，应用层处理重连后的状态恢复
+- Agent 会话 ID 持久化到数据库，重启后自动恢复
 
 ## 核心架构
 
@@ -21,51 +22,78 @@ Claude Code Manager 是一个任务管理系统，用于管理和监控 Claude C
 │  │   React UI   │  │  socket.io   │  │   Terminal   │     │
 │  │  Components  │──│    Client    │──│   Component  │     │
 │  └──────────────┘  └──────────────┘  └──────────────┘     │
-└─────────────────────────┬───────────────────────────────────┘
-                          │ WebSocket (socket.io)
-                          │
-┌─────────────────────────▼───────────────────────────────────┐
-│                   Express Server                            │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐     │
-│  │   REST API   │  │  socket.io   │  │     File     │     │
-│  │   Endpoints  │  │    Server    │  │   Watcher    │     │
-│  └──────────────┘  └──────────────┘  └──────────────┘     │
-│         │                  │                  │             │
-│         └──────────────────┼──────────────────┘             │
-│                            │                                │
-│  ┌─────────────────────────▼──────────────────────────┐    │
-│  │              PTY Manager                            │    │
-│  │  ┌──────────────────────────────────────────────┐  │    │
-│  │  │  sessions: Map<sessionName, SessionEntry>    │  │    │
-│  │  │  - ptyProcess: IPty                          │  │    │
-│  │  │  - clients: Set<Socket>                      │  │    │
-│  │  │  - outputBuffer: string                      │  │    │
-│  │  └──────────────────────────────────────────────┘  │    │
-│  └─────────────────────────┬──────────────────────────┘    │
-└────────────────────────────┼─────────────────────────────────┘
-                             │
-                             │ node-pty
-                             │
-┌────────────────────────────▼─────────────────────────────────┐
-│                    PTY Processes                             │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │  bash shell  │  │  bash shell  │  │  bash shell  │      │
-│  │   (task 1)   │  │   (task 2)   │  │   (task 3)   │      │
-│  │              │  │              │  │              │      │
-│  │  claude CLI  │  │  claude CLI  │  │  claude CLI  │      │
-│  └──────────────┘  └──────────────┘  └──────────────┘      │
-└──────────────────────────────────────────────────────────────┘
+└──────────┬──────────────────┬───────────────────────────────┘
+           │ HTTP (8080)      │ WebSocket (3000)
+           │                  │
+┌──────────▼──────────┐  ┌────▼──────────────────────────────┐
+│  Static Server      │  │   API Server (Express)            │
+│  (port 8080)        │  │   (port 3000)                     │
+│  ┌──────────────┐   │  │  ┌──────────────┐  ┌──────────┐  │
+│  │ Static Files │   │  │  │   REST API   │  │socket.io │  │
+│  │ (client/dist)│   │  │  │   Endpoints  │  │  Server  │  │
+│  └──────────────┘   │  │  └──────────────┘  └──────────┘  │
+│                     │  │         │                  │       │
+│  PM2: claude-       │  │         └──────────────────┼───┐   │
+│  manager-static     │  │                            │   │   │
+└─────────────────────┘  │  ┌─────────────────────────▼───▼─┐ │
+                         │  │       PTY Manager              │ │
+                         │  │  sessions: Map<name, Entry>    │ │
+                         │  └────────────────┬───────────────┘ │
+                         │                   │                 │
+                         │  PM2: claude-manager-api            │
+                         └───────────────────┼─────────────────┘
+                                             │ node-pty
+                         ┌───────────────────▼─────────────────┐
+                         │      PTY Processes (bash/claude)    │
+                         └─────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────┐
 │                   Persistence Layer                          │
 │  ┌──────────────┐  ┌──────────────────────────────────┐     │
 │  │   SQLite DB  │  │   Session Buffers (on disk)      │     │
-│  │  (metadata)  │  │   data/sessions/*.buf            │     │
+│  │  (metadata + │  │   data/sessions/*.buf            │     │
+│  │   kv_store)  │  │                                  │     │
 │  └──────────────┘  └──────────────────────────────────┘     │
 └──────────────────────────────────────────────────────────────┘
 ```
 
 ## 关键组件
+
+### 0. Static Server (static-server.js)
+
+**职责**: 独立的静态文件服务器，与 API 服务解耦
+
+**实现**:
+```javascript
+const express = require('express');
+const path = require('path');
+const app = express();
+const PORT = process.env.STATIC_PORT || 8080;
+
+app.use(express.static(path.join(__dirname, 'client/dist')));
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'client/dist/index.html'));
+});
+
+app.listen(PORT, () => {
+  console.log(`Static server running on port ${PORT}`);
+});
+```
+
+**设计决策**:
+- 独立进程运行，不受 API 服务重启影响
+- 支持 SPA 路由（所有路径返回 index.html）
+- 端口可配置（默认 8080）
+
+**PM2 配置**:
+```javascript
+{
+  name: 'claude-manager-static',
+  script: 'static-server.js',
+  instances: 1,
+  autorestart: true
+}
+```
 
 ### 1. PTY Manager (server/pty-manager.js)
 
