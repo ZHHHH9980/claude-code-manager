@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "scripts": {
     "dev": "node server/index.js",
+    "static": "node static-server.js",
     "build": "cd client && npm run build",
     "test": "node --test tests/pty-manager.test.js tests/terminal-socket.test.js",
     "test:terminal": "node --test tests/pty-manager.test.js tests/terminal-socket.test.js",

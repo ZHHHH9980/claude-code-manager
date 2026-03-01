@@ -18,7 +18,12 @@ const SESSIONS_DIR = path.join(__dirname, '../data/sessions');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: '*' } });
+const io = new Server(server, { 
+  cors: { 
+    origin: process.env.FRONTEND_URL || 'http://localhost:8080',
+    credentials: true
+  } 
+});
 const taskChatRuntimeManager = new TaskChatRuntimeManager({
   logMetric: (event, payload) => logChatMetric(event, payload),
 });
@@ -34,7 +39,8 @@ app.use((req, res, next) => {
   res.status(401).json({ error: 'Unauthorized' });
 });
 
-app.use(express.static(path.join(__dirname, '../client/dist')));
+// Static files are now served by static-server.js
+// app.use(express.static(path.join(__dirname, '../client/dist')));
 
 // Projects
 app.get('/api/projects', (req, res) => {
@@ -500,11 +506,12 @@ function startClaudeStream({ cwd, message, onProcess, scope, taskId = null, sess
 
 // Agent chat - keep one hot runtime like task chat to avoid cold-start each turn.
 const AGENT_RUNTIME_KEY = '__agent_home__';
-let agentChatSessionId = null;
+let agentChatSessionId = db.getAgentSessionId(); // Restore from database on startup
 
 function resetAgentChat(reason = 'agent_reset') {
   taskChatRuntimeManager.stopTask(AGENT_RUNTIME_KEY, reason);
   agentChatSessionId = null;
+  db.setAgentSessionId(null); // Clear persisted session ID
 }
 
 const AGENT_TERMINAL_SESSION = process.env.AGENT_TERMINAL_SESSION || 'claude-agent-home';
@@ -563,7 +570,10 @@ app.post('/api/agent', (req, res) => {
 
     const hasSession = Boolean(agentChatSessionId);
     const sessionId = agentChatSessionId || randomUUID();
-    if (!hasSession) agentChatSessionId = sessionId;
+    if (!hasSession) {
+      agentChatSessionId = sessionId;
+      db.setAgentSessionId(sessionId); // Persist to database
+    }
     db.appendAgentChatMessage('user', prompt);
 
     const cwd = path.join(__dirname, '..');
@@ -610,6 +620,7 @@ app.post('/api/agent', (req, res) => {
       const msg = String(err?.message || 'agent chat runtime error');
       if (/not logged in|authentication_failed|session .* not found|invalid session/i.test(msg)) {
         agentChatSessionId = null;
+        db.setAgentSessionId(null); // Clear persisted session ID
       }
       if (res.writableEnded || clientClosed) return;
       res.write(`data: ${JSON.stringify({
@@ -730,7 +741,9 @@ function selfDeploy() {
       deploying = false;
       if (err) return reject(err);
       setTimeout(() => {
-        exec('pm2 restart claude-manager', () => {});
+        // Restart both API and static servers
+        exec('pm2 restart claude-manager-api', () => {});
+        exec('pm2 restart claude-manager-static', () => {});
       }, 500);
       resolve(stdout);
     });

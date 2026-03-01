@@ -7,16 +7,17 @@ Web-based management interface for running multiple Claude Code sessions in para
 ```
 Browser (React + xterm.js)
     ↕ socket.io
-Express Server (Node.js)
-    ↕ node-pty
-tmux sessions (one per task)
-    ↕
-Claude Code / Ralph autonomous loop
+Static Server (port 8080) | API Server (port 3000)
+                          ↕ node-pty
+                      PTY sessions (one per task)
+                          ↕
+                  Claude Code / Ralph autonomous loop
 ```
 
+- **Frontend/Backend Separation**: Static files served independently from API server
 - **SQLite** as primary database for fast reads/writes
 - **Notion** as async sync target (optional, non-blocking)
-- **tmux** decouples Claude Code processes from the web server — sessions survive server restarts
+- **PTY sessions** decouple Claude Code processes from the web server — sessions survive server restarts
 - **claude-workflow** auto-initialized in each worktree on task start
 
 ## Features
@@ -24,11 +25,11 @@ Claude Code / Ralph autonomous loop
 - Manage multiple projects and tasks from a single dashboard
 - Start Claude Code in interactive mode or Ralph autonomous loop mode
 - Real-time terminal in browser via xterm.js
-- Attach to the same session from native terminal: `tmux attach -t <session>`
 - Git worktree support for parallel feature development
 - PROGRESS.md file watching with Notion sync
 - Session recovery on server restart
 - One-click deploy to remote server
+- **Frontend stays available during API server restarts** (PM2 zero-downtime)
 
 ## Quick Start
 
@@ -42,8 +43,14 @@ cp .env.example .env
 # Edit .env with your settings
 
 # Development
-cd client && npm run dev &   # Frontend on :5173
-npm run dev                   # Server on :3000
+cd client && npm run dev &   # Frontend dev server on :5173 (with proxy)
+npm run dev                   # API server on :3000
+
+# Production (using PM2)
+npm run build                 # Build frontend
+pm2 start server/index.js --name claude-manager-api
+pm2 start static-server.js --name claude-manager-static
+pm2 save
 
 # UI mobile guard (optional, in another terminal)
 npm run ui:mobile:watch
@@ -57,7 +64,9 @@ npm run dev
 
 | Variable | Description |
 |----------|-------------|
-| `PORT` | Server port (default: 3000) |
+| `PORT` | API server port (default: 3000) |
+| `STATIC_PORT` | Static server port (default: 8080) |
+| `FRONTEND_URL` | Frontend URL for CORS (default: http://localhost:8080) |
 | `ACCESS_TOKEN` | Bearer token for API auth (optional) |
 | `NOTION_TOKEN` | Notion integration token (optional) |
 | `NOTION_PROJECTS_DB` | Notion Projects database ID |

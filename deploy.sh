@@ -31,12 +31,14 @@ cd client && npm install && npm run build && cd ..
 set -a && [ -f "$HOME/.bash_profile" ] && . "$HOME/.bash_profile" && set +a
 
 if echo "$CHANGED" | grep -qv '^client/'; then
-  echo "Restarting server..."
-  pm2 restart claude-manager --update-env 2>/dev/null || pm2 start server/index.js --name claude-manager
-  pm2 save
-else
-  echo "Frontend-only changes, skipping server restart"
+  echo "Restarting API server..."
+  pm2 restart claude-manager-api --update-env 2>/dev/null || pm2 start server/index.js --name claude-manager-api
 fi
+
+echo "Restarting static server..."
+pm2 restart claude-manager-static --update-env 2>/dev/null || pm2 start static-server.js --name claude-manager-static
+
+pm2 save
 REMOTE_SCRIPT
 
 echo "Done! http://43.138.129.193:3000"

@@ -51,6 +51,12 @@ db.exec(`
     text TEXT NOT NULL,
     created_at TEXT DEFAULT (datetime('now'))
   );
+
+  CREATE TABLE IF NOT EXISTS kv_store (
+    key TEXT PRIMARY KEY,
+    value TEXT,
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
 `);
 
 function ensureTaskSchema() {
@@ -197,6 +203,23 @@ function deleteTask(id) {
   return result.changes > 0;
 }
 
+function getAgentSessionId() {
+  const row = db.prepare('SELECT value FROM kv_store WHERE key = ?').get('agent_session_id');
+  return row?.value || null;
+}
+
+function setAgentSessionId(sessionId) {
+  if (sessionId === null || sessionId === undefined) {
+    db.prepare('DELETE FROM kv_store WHERE key = ?').run('agent_session_id');
+  } else {
+    db.prepare(`
+      INSERT INTO kv_store (key, value, updated_at) 
+      VALUES (?, ?, datetime('now'))
+      ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = datetime('now')
+    `).run('agent_session_id', sessionId, sessionId);
+  }
+}
+
 module.exports = {
   getProjects,
   getProject,
@@ -214,4 +237,6 @@ module.exports = {
   clearAgentChatMessages,
   deleteProject,
   deleteTask,
+  getAgentSessionId,
+  setAgentSessionId,
 };
