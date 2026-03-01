@@ -23,7 +23,7 @@ CHANGED=$(git diff "$OLD_HEAD" HEAD --name-only)
 if echo "$CHANGED" | grep -qv '^client/'; then
   echo "Backend changes detected, installing server deps..."
   npm install --ignore-scripts
-  npm rebuild node-pty --build-from-source
+  (cd /opt/claude-code-manager && npm rebuild node-pty --build-from-source)
 fi
 
 cd client && npm install && npm run build && cd ..
