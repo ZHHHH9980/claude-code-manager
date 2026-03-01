@@ -13,6 +13,7 @@ const { syncTaskToNotion } = require('./notion-sync');
 const ptyManager = require('./pty-manager');
 const { TaskChatRuntimeManager } = require('./task-chat-runtime');
 const { watchProgress, unwatchProgress } = require('./file-watcher');
+const { resolveAdapter, listAdapters } = require('./adapters');
 
 const WORKFLOW_DIR = process.env.WORKFLOW_DIR || path.join(process.env.HOME, 'Documents/claude-workflow');
 const SESSIONS_DIR = path.join(__dirname, '../data/sessions');
@@ -81,6 +82,18 @@ app.get('/api/projects', (req, res) => {
   res.json(db.getProjects());
 });
 
+app.get('/api/adapters', (req, res) => {
+  const payload = listAdapters().map((adapter) => ({
+    name: adapter.name,
+    label: adapter.label,
+    color: adapter.color,
+    models: Array.isArray(adapter.models) ? adapter.models : [],
+    defaultModel: adapter.defaultModel || null,
+    supportsChatMode: Boolean(adapter.chatMode),
+  }));
+  res.json(payload);
+});
+
 app.post('/api/projects', (req, res) => {
   const project = db.createProject(req.body);
   res.json(project);
@@ -109,6 +122,12 @@ app.post('/api/tasks', (req, res) => {
 app.post('/api/tasks/:id/start', (req, res) => {
   const { id } = req.params;
   const { worktreePath, branch, model, mode } = req.body;
+  const resolved = resolveAdapter(mode);
+  const adapter = resolved.adapter;
+  if (resolved.usedLegacyAlias) {
+    console.warn(`[adapter] legacy mode "${resolved.requestedName}" requested, fallback to "${resolved.resolvedName}"`);
+  }
+  const finalModel = model || adapter.defaultModel;
   const safeTaskId = String(id).replace(/[^a-zA-Z0-9_-]/g, '').slice(-24) || 'task';
   const sessionName = `claude-task-${safeTaskId}`;
 
@@ -116,6 +135,8 @@ app.post('/api/tasks/:id/start', (req, res) => {
     status: 'in_progress',
     worktreePath,
     ptySession: sessionName,
+    mode: adapter.name,
+    model: finalModel,
   });
   syncTaskToNotion(task);
 
@@ -127,31 +148,33 @@ app.post('/api/tasks/:id/start', (req, res) => {
   }
 
   let ptyOk = true;
+  let error = null;
   try {
     const existed = ptyManager.sessionExists(sessionName);
     ptyManager.ensureSession(sessionName, worktreePath);
-    if (!existed) {
+    if (!existed && !isCommandAvailable(adapter.cli)) {
+      ptyOk = false;
+      error = `CLI not found: ${adapter.cli}`;
+      console.warn(`task ${id} launch skipped: ${error}`);
+    } else if (!existed) {
       setTimeout(() => {
         try {
-          if (mode === 'ralph') {
-            ptyManager.sendInput(sessionName, './ralph.sh --tool claude\n');
-          } else {
-            ptyManager.sendInput(sessionName, `claude --model ${model || 'claude-sonnet-4-5'} --dangerously-skip-permissions\n`);
-            // Auto-accept the --dangerously-skip-permissions confirmation dialog
-            setTimeout(() => { try { ptyManager.sendInput(sessionName, '\n'); } catch {} }, 3000);
-          }
+          launchAdapterInSession(sessionName, { adapter, model: finalModel, context: `start task ${id}` });
         } catch (err) {
+          ptyOk = false;
+          error = err?.message || String(err);
           console.warn(`pty sendInput failed for task ${id}:`, err?.message || err);
         }
       }, 500);
     }
   } catch (err) {
     ptyOk = false;
+    error = err?.message || String(err);
     console.warn(`pty unavailable for task ${id}:`, err?.message || err);
   }
 
   watchProgress(worktreePath, id);
-  res.json({ sessionName, ptyOk });
+  res.json({ sessionName, ptyOk, mode: adapter.name, model: finalModel, error });
 });
 
 app.post('/api/tasks/:id/stop', (req, res) => {
@@ -208,11 +231,50 @@ function logChatMetric(event, payload) {
   console.log(`[chat-metric] ${JSON.stringify({ event, ...payload })}`);
 }
 
+function isCommandAvailable(cmd) {
+  const safe = String(cmd || '').trim();
+  if (!safe || !/^[a-zA-Z0-9._-]+$/.test(safe)) return false;
+  try {
+    execSync(`bash -lc "command -v ${safe}"`, { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function buildAdapterLaunchCommand(adapter, model) {
+  const args = [];
+  const finalModel = String(model || adapter?.defaultModel || '').trim();
+  if (finalModel) args.push('--model', finalModel);
+  if (Array.isArray(adapter?.defaultArgs) && adapter.defaultArgs.length > 0) {
+    args.push(...adapter.defaultArgs);
+  }
+  return `${adapter?.cli || 'claude'} ${args.join(' ')}`.trim();
+}
+
+function launchAdapterInSession(sessionName, { adapter, model, context }) {
+  ptyManager.sendInput(sessionName, 'export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 LC_CTYPE=en_US.UTF-8\n');
+  ptyManager.sendInput(sessionName, `${buildAdapterLaunchCommand(adapter, model)}\n`);
+  if (adapter?.autoConfirm?.enabled) {
+    const delayMs = Number(adapter?.autoConfirm?.delayMs) || 3000;
+    setTimeout(() => { try { ptyManager.sendInput(sessionName, '\n'); } catch {} }, delayMs);
+  }
+  if (context) {
+    console.log(`launched adapter=${adapter?.name || 'claude'} session=${sessionName} (${context})`);
+  }
+}
+
 function ensureTaskProcess(task, opts = {}) {
   const { ensurePty = true } = opts;
   if (!task) return null;
+  const resolved = resolveAdapter(task.mode);
+  const adapter = resolved.adapter;
+  if (resolved.usedLegacyAlias) {
+    console.warn(`[adapter] legacy mode "${resolved.requestedName}" detected, fallback to "${resolved.resolvedName}"`);
+  }
   const safeTaskId = String(task.id || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(-24) || 'task';
   const sessionName = task.pty_session || `claude-task-${safeTaskId}`;
+  const finalModel = task.model || adapter.defaultModel;
   let cwd = task.worktree_path;
   if (!cwd && task.project_id) {
     cwd = db.getProject(task.project_id)?.repo_path;
@@ -226,13 +288,11 @@ function ensureTaskProcess(task, opts = {}) {
       if (!existed) {
         setTimeout(() => {
           try {
-            ptyManager.sendInput(sessionName, 'export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 LC_CTYPE=en_US.UTF-8\n');
-            if (task.mode === 'ralph') ptyManager.sendInput(sessionName, './ralph.sh --tool claude\n');
-            else {
-              ptyManager.sendInput(sessionName, `claude --model ${task.model || 'claude-sonnet-4-5'} --dangerously-skip-permissions\n`);
-              // Auto-accept the --dangerously-skip-permissions confirmation dialog
-              setTimeout(() => { try { ptyManager.sendInput(sessionName, '\n'); } catch {} }, 3000);
+            if (!isCommandAvailable(adapter.cli)) {
+              console.warn(`task ${task.id} launch skipped: CLI not found: ${adapter.cli}`);
+              return;
             }
+            launchAdapterInSession(sessionName, { adapter, model: finalModel, context: `ensure task ${task.id}` });
           } catch (err) {
             console.warn(`pty sendInput failed for task ${task.id}:`, err?.message || err);
           }
@@ -242,8 +302,13 @@ function ensureTaskProcess(task, opts = {}) {
       console.warn(`pty ensureSession failed for task ${task.id}:`, err?.message || err);
     }
   }
-  if (task.pty_session !== sessionName || task.status !== 'in_progress') {
-    const updated = db.updateTask(task.id, { ptySession: sessionName, status: 'in_progress' });
+  if (task.pty_session !== sessionName || task.status !== 'in_progress' || task.mode !== adapter.name || task.model !== finalModel) {
+    const updated = db.updateTask(task.id, {
+      ptySession: sessionName,
+      status: 'in_progress',
+      mode: adapter.name,
+      model: finalModel,
+    });
     syncTaskToNotion(updated);
   }
   if (cwd) watchProgress(cwd, task.id);
@@ -549,54 +614,20 @@ function resetAgentChat(reason = 'agent_reset') {
 }
 
 const AGENT_TERMINAL_SESSION = process.env.AGENT_TERMINAL_SESSION || 'claude-agent-home';
-const AGENT_TERMINAL_MODES = {
-  claude: {
-    cli: 'claude',
-    command: 'claude --model claude-sonnet-4-5 --dangerously-skip-permissions',
-    autoConfirm: true,
-  },
-  codex: {
-    cli: 'codex',
-    command: 'codex --model gpt-5-codex --full-auto',
-    autoConfirm: false,
-  },
-};
-
-function resolveAgentTerminalMode(mode) {
-  const normalized = String(mode || '').trim().toLowerCase() || 'claude';
-  const config = AGENT_TERMINAL_MODES[normalized];
-  if (!config) return null;
-  return { mode: normalized, ...config };
-}
-
-function isCommandAvailable(cmd) {
-  const safe = String(cmd || '').trim();
-  if (!safe || !/^[a-zA-Z0-9._-]+$/.test(safe)) return false;
-  try {
-    execSync(`bash -lc "command -v ${safe}"`, { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 function startAgentTerminalSession(mode = 'claude') {
-  const selected = resolveAgentTerminalMode(mode);
-  if (!selected) {
-    return {
-      sessionName: AGENT_TERMINAL_SESSION,
-      ptyOk: false,
-      mode: 'claude',
-      error: `unsupported agent terminal mode: ${mode}`,
-    };
+  const resolved = resolveAdapter(mode);
+  const adapter = resolved.adapter;
+  if (resolved.usedLegacyAlias) {
+    console.warn(`[adapter] legacy mode "${resolved.requestedName}" requested for agent terminal, fallback to "${resolved.resolvedName}"`);
   }
 
-  if (!isCommandAvailable(selected.cli)) {
+  if (!isCommandAvailable(adapter.cli)) {
     return {
       sessionName: AGENT_TERMINAL_SESSION,
       ptyOk: false,
-      mode: selected.mode,
-      error: `CLI not found: ${selected.cli}`,
+      mode: adapter.name,
+      error: `CLI not found: ${adapter.cli}`,
     };
   }
 
@@ -609,11 +640,7 @@ function startAgentTerminalSession(mode = 'claude') {
     if (!existed) {
       setTimeout(() => {
         try {
-          ptyManager.sendInput(AGENT_TERMINAL_SESSION, 'export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 LC_CTYPE=en_US.UTF-8\n');
-          ptyManager.sendInput(AGENT_TERMINAL_SESSION, `${selected.command}\n`);
-          if (selected.autoConfirm) {
-            setTimeout(() => { try { ptyManager.sendInput(AGENT_TERMINAL_SESSION, '\n'); } catch {} }, 3000);
-          }
+          launchAdapterInSession(AGENT_TERMINAL_SESSION, { adapter, model: adapter.defaultModel, context: 'agent terminal' });
         } catch (err) {
           ptyOk = false;
           error = err?.message || String(err);
@@ -629,7 +656,7 @@ function startAgentTerminalSession(mode = 'claude') {
   return {
     sessionName: AGENT_TERMINAL_SESSION,
     ptyOk,
-    mode: selected.mode,
+    mode: adapter.name,
     error,
   };
 }
@@ -885,12 +912,16 @@ function recoverSessions() {
           // Re-launch CC in the new PTY
           setTimeout(() => {
             try {
-              if (task.mode === 'ralph') {
-                ptyManager.sendInput(task.pty_session, './ralph.sh --tool claude\n');
-              } else {
-                ptyManager.sendInput(task.pty_session, `claude --model ${task.model || 'claude-sonnet-4-5'} --dangerously-skip-permissions\n`);
-                setTimeout(() => { try { ptyManager.sendInput(task.pty_session, '\n'); } catch {} }, 3000);
+              const resolved = resolveAdapter(task.mode);
+              const adapter = resolved.adapter;
+              if (resolved.usedLegacyAlias) {
+                console.warn(`[adapter] legacy mode "${resolved.requestedName}" detected during recovery, fallback to "${resolved.resolvedName}"`);
               }
+              if (!isCommandAvailable(adapter.cli)) {
+                console.warn(`recover task ${task.id} skipped: CLI not found: ${adapter.cli}`);
+                return;
+              }
+              launchAdapterInSession(task.pty_session, { adapter, model: task.model || adapter.defaultModel, context: `recover task ${task.id}` });
             } catch {}
           }, 500);
 
