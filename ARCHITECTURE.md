@@ -139,12 +139,15 @@ SessionEntry {
 **REST API 端点**:
 - `GET /api/projects`: 获取所有项目
 - `POST /api/projects`: 创建项目
+- `GET /api/adapters`: 获取可用 Agent 适配器列表
 - `GET /api/tasks`: 获取任务列表
 - `POST /api/tasks`: 创建任务
 - `POST /api/tasks/:id/start`: 启动任务
 - `POST /api/tasks/:id/stop`: 停止任务
 - `DELETE /api/tasks/:id`: 删除任务
 - `POST /api/tasks/:id/chat`: 任务聊天
+- `POST /api/agent/terminal/start`: 启动主页 Agent Terminal（支持 `mode`）
+- `POST /api/agent/terminal/stop`: 停止主页 Agent Terminal
 - `POST /api/agent`: Agent 聊天
 - `POST /api/deploy`: 自动部署
 
@@ -163,7 +166,7 @@ recoverSessions() {
   // 2. 遍历数据库中 in_progress 状态的任务
   // 3. 如果 PTY 会话存在，重新附加
   // 4. 如果 PTY 会话不存在，尝试从磁盘恢复缓冲区
-  // 5. 创建新的 PTY 会话并重新启动 Claude CLI
+  // 5. 创建新的 PTY 会话并按 task.mode 对应 adapter 重新启动 CLI
 }
 
 // 优雅关闭时调用
@@ -173,6 +176,26 @@ process.on('SIGTERM', () => {
   // 3. 退出进程
 })
 ```
+
+### 2.1 Adapter Registry (server/adapters/*.js)
+
+**职责**: 将不同编码 Agent 的 CLI 配置抽象为可插拔适配器，避免在业务流程中硬编码命令。
+
+**当前内置适配器**:
+- `claude`: Claude Code
+- `codex`: Codex
+
+**关键能力**:
+- 统一的启动参数配置（`cli`、`defaultArgs`、`defaultModel`）
+- UI 元信息下发（`label`、`color`、`models`）
+- 聊天能力声明（`chatMode`，为 `null` 表示不支持 task chat runtime）
+- 历史模式兼容（`ralph -> claude` fallback）
+
+**数据流**:
+1. 前端 `GET /api/adapters` 获取 adapter 元信息并渲染按钮/下拉。
+2. 启动任务或主页 Agent Terminal 时，后端按 `mode` 解析 adapter。
+3. 后端统一拼装启动命令并注入 PTY 会话。
+4. 若目标 CLI 缺失，返回 `ptyOk=false + error`，前端不再打开空壳终端。
 
 ### 3. Database (server/db.js)
 
@@ -288,12 +311,9 @@ function recoverSessions() {
         entry.outputBuffer = savedBuffer + '\r\n[session auto-recovered]\r\n';
       }
 
-      // 重新启动 Claude CLI
+      // 按 task.mode 解析 adapter 后重新启动对应 CLI
       setTimeout(() => {
-        ptyManager.sendInput(
-          task.pty_session,
-          `claude --model ${task.model} --dangerously-skip-permissions\n`
-        );
+        // launchAdapterInSession(task.pty_session, { adapter, model: task.model })
       }, 500);
     }
   }
@@ -426,7 +446,7 @@ let agentChatSessionId = null; // 问题：内存变量，重启后丢失
    ↓
 8. 创建新的 PTY 会话
    ↓
-9. 重新启动 Claude CLI
+9. 按任务 adapter 重新启动对应 CLI
    ↓
 10. 客户端？？？（卡死，未重连）
 ```
