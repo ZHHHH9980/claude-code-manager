@@ -68,6 +68,9 @@ function setupServer() {
         const sessionName = typeof payload === 'string' ? payload : payload?.sessionName;
         const initCols = typeof payload === 'object' && payload?.cols > 0 ? payload.cols : null;
         const initRows = typeof payload === 'object' && payload?.rows > 0 ? payload.rows : null;
+        const replayBuffer = typeof payload === 'object' && typeof payload?.replayBuffer === 'boolean'
+          ? payload.replayBuffer
+          : true;
 
         const entry = mockPtyManager.sessions.get(sessionName);
         if (!entry) return socket.emit('terminal:error', 'Session not found');
@@ -75,8 +78,10 @@ function setupServer() {
         entry.clients.add(socket);
         entry.ptyProcess.onData((data) => socket.emit(`terminal:data:${sessionName}`, data));
         // Replay current screen content
-        const captured = mockPtyManager.capturePane(sessionName);
-        if (captured && captured.trim()) socket.emit(`terminal:data:${sessionName}`, captured);
+        if (replayBuffer) {
+          const captured = mockPtyManager.capturePane(sessionName);
+          if (captured && captured.trim()) socket.emit(`terminal:data:${sessionName}`, captured);
+        }
         // Resize PTY to client dimensions BEFORE SIGWINCH
         if (initCols && initRows) {
           mockPtyManager.resizeSession(sessionName, initCols, initRows);
@@ -325,5 +330,23 @@ describe('terminal socket handlers', () => {
       received.some(d => d.includes('Claude Code')),
       `screen content must be sent on attach — got: ${JSON.stringify(received)}`
     );
+  });
+
+  it('terminal:attach supports replayBuffer=false to skip history replay', async () => {
+    const SCREEN = 'history line 1\r\nhistory line 2\r\n';
+    mockPtyManager.screenContent.set('test-session', SCREEN);
+
+    const client = connectClient();
+    await new Promise(r => client.on('connect', r));
+
+    const received = [];
+    client.on('terminal:data:test-session', (d) => received.push(d));
+    client.emit('terminal:attach', { sessionName: 'test-session', replayBuffer: false });
+    await wait(150);
+
+    mockPtyManager.screenContent.delete('test-session');
+    client.disconnect();
+
+    assert.equal(received.some(d => d.includes('history line 1')), false, `should not replay history: ${JSON.stringify(received)}`);
   });
 });

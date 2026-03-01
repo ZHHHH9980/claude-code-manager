@@ -8,7 +8,7 @@ function safeFit(fitAddon) {
   try { fitAddon.fit(); } catch {}
 }
 
-export function Terminal({ socket, sessionName }) {
+export function Terminal({ socket, sessionName, replayOnAttach = true }) {
   const containerRef = useRef(null);
   const lastSizeRef = useRef({ cols: 0, rows: 0 });
   const resizeTimerRef = useRef(null);
@@ -69,7 +69,12 @@ export function Terminal({ socket, sessionName }) {
 
     // Fit to container first so we send correct dimensions with attach.
     safeFit(fitAddon);
-    socket.emit('terminal:attach', { sessionName, cols: term.cols, rows: term.rows });
+    socket.emit('terminal:attach', {
+      sessionName,
+      cols: term.cols,
+      rows: term.rows,
+      replayBuffer: Boolean(replayOnAttach),
+    });
     scheduleSyncSize(true);
 
     // Focus after a short delay (container may not be fully visible yet)
@@ -103,7 +108,7 @@ export function Terminal({ socket, sessionName }) {
       socket.off('terminal:error', onTerminalError);
       container.removeEventListener('mousedown', focusHandler);
     };
-  }, [socket, sessionName]);
+  }, [socket, sessionName, replayOnAttach]);
 
   return <div ref={containerRef} className="w-full h-full terminal-host" style={{ overflow: 'hidden' }} />;
 }

@@ -65,6 +65,7 @@ export default function App() {
   const [activeSession, setActiveSession] = useState(null);
   const [activeTaskId, setActiveTaskId] = useState(null);
   const [activeTaskTitle, setActiveTaskTitle] = useState('');
+  const [isTaskTerminalOpen, setIsTaskTerminalOpen] = useState(false);
 
   const { socket } = useSocket();
   const [agentTerminalSession, setAgentTerminalSession] = useState(null);
@@ -146,12 +147,12 @@ export default function App() {
   }, [selectedProject]);
 
   useEffect(() => {
-    if (!activeTaskId) {
+    if (!activeTaskId || !isTaskTerminalOpen) {
       localStorage.removeItem(STORAGE_ACTIVE_TASK_ID);
       return;
     }
     localStorage.setItem(STORAGE_ACTIVE_TASK_ID, String(activeTaskId));
-  }, [activeTaskId]);
+  }, [activeTaskId, isTaskTerminalOpen]);
 
   useEffect(() => {
     if (!selectedProject || activeTaskId || !tasksLoaded) return;
@@ -162,13 +163,19 @@ export default function App() {
     setActiveSession(savedTask.pty_session);
     setActiveTaskId(savedTask.id);
     setActiveTaskTitle(savedTask.title || savedTask.pty_session);
+    setIsTaskTerminalOpen(true);
   }, [selectedProject, tasks, activeTaskId, tasksLoaded]);
 
-  function closeActiveTaskChat() {
+  function clearActiveTaskChat() {
     localStorage.removeItem(STORAGE_ACTIVE_TASK_ID);
     setActiveSession(null);
     setActiveTaskId(null);
     setActiveTaskTitle('');
+    setIsTaskTerminalOpen(false);
+  }
+
+  function closeTaskTerminalModal() {
+    setIsTaskTerminalOpen(false);
   }
 
   function refreshAll() {
@@ -203,6 +210,7 @@ export default function App() {
     setActiveSession(sessionName);
     setActiveTaskId(task.id);
     setActiveTaskTitle(task.title || sessionName);
+    setIsTaskTerminalOpen(true);
     refreshAll();
   }
 
@@ -212,6 +220,7 @@ export default function App() {
     setActiveSession(task.pty_session);
     setActiveTaskId(task.id);
     setActiveTaskTitle(task.title || task.pty_session);
+    setIsTaskTerminalOpen(true);
   }
 
   async function handleDeleteTask(task) {
@@ -219,7 +228,7 @@ export default function App() {
     const yes = window.confirm(`Delete task "${task.title}"? This will stop its runtime and remove chat history.`);
     if (!yes) return;
     await fetch(`${API_BASE_URL}/api/tasks/${task.id}`, { method: 'DELETE' });
-    if (String(activeTaskId) === String(task.id)) closeActiveTaskChat();
+    if (String(activeTaskId) === String(task.id)) clearActiveTaskChat();
     refreshAll();
   }
 
@@ -291,7 +300,7 @@ export default function App() {
     if (!activeSession || !activeTaskId || !tasksLoaded) return;
     const currentTask = tasks.find((task) => String(task.id) === String(activeTaskId));
     if (!currentTask || currentTask.status === 'done' || currentTask.status === 'interrupted') {
-      closeActiveTaskChat();
+      clearActiveTaskChat();
     }
   }, [tasks, activeSession, activeTaskId, tasksLoaded]);
 
@@ -424,7 +433,11 @@ export default function App() {
       </div>
 
       {activeSession && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4" style={{ background: 'rgba(0, 0, 0, 0.58)' }}>
+        <div
+          className={`fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 transition-opacity ${isTaskTerminalOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
+          style={{ background: 'rgba(0, 0, 0, 0.58)' }}
+          aria-hidden={!isTaskTerminalOpen}
+        >
           <div className="w-full h-[100dvh] sm:h-[82vh] sm:max-w-5xl rounded-none sm:rounded-2xl flex flex-col overflow-hidden ccm-panel">
             <div className="flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-3 border-b text-xs" style={{ borderColor: 'var(--border)' }}>
               <span className="font-semibold shrink-0">Task Terminal</span>
@@ -432,7 +445,7 @@ export default function App() {
               <span className="truncate">{activeTaskTitle}</span>
               <span style={{ color: 'var(--text-3)' }} className="hidden md:inline">({activeSession})</span>
               <button
-                onClick={closeActiveTaskChat}
+                onClick={closeTaskTerminalModal}
                 className="ml-auto ccm-button ccm-button-soft text-xs px-3 py-1.5"
               >
                 Close

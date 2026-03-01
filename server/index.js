@@ -952,6 +952,9 @@ io.on('connection', (socket) => {
     const sessionName = typeof payload === 'string' ? payload : payload?.sessionName;
     const initCols = typeof payload === 'object' && payload?.cols > 0 ? payload.cols : null;
     const initRows = typeof payload === 'object' && payload?.rows > 0 ? payload.rows : null;
+    const replayBuffer = typeof payload === 'object' && typeof payload?.replayBuffer === 'boolean'
+      ? payload.replayBuffer
+      : true;
 
     let entry = ptyManager.sessions.get(sessionName);
     if (!entry && ptyManager.sessionExists(sessionName)) {
@@ -963,10 +966,12 @@ io.on('connection', (socket) => {
     entry.clients.add(socket);
 
     // Replay session buffer on attach so reconnect/new tab can see recent output.
-    const buffered = ptyManager.getBufferedOutput
-      ? ptyManager.getBufferedOutput(sessionName)
-      : '';
-    if (buffered) socket.emit(`terminal:data:${sessionName}`, buffered);
+    if (replayBuffer) {
+      const buffered = ptyManager.getBufferedOutput
+        ? ptyManager.getBufferedOutput(sessionName)
+        : '';
+      if (buffered) socket.emit(`terminal:data:${sessionName}`, buffered);
+    }
 
     // If client sent its dimensions, resize PTY to match BEFORE SIGWINCH so the
     // terminal app redraws at the correct size.
