@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
+const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const { randomUUID } = require('crypto');
@@ -15,22 +16,55 @@ const { watchProgress, unwatchProgress } = require('./file-watcher');
 
 const WORKFLOW_DIR = process.env.WORKFLOW_DIR || path.join(process.env.HOME, 'Documents/claude-workflow');
 const SESSIONS_DIR = path.join(__dirname, '../data/sessions');
+const DEFAULT_FRONTEND_ORIGINS = new Set(['http://localhost:8080', 'http://127.0.0.1:8080']);
+
+function parseFrontendOrigins(input) {
+  return String(input || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+const configuredFrontendOrigins = parseFrontendOrigins(process.env.FRONTEND_URL);
+const allowAnyOrigin = configuredFrontendOrigins.length === 0
+  || (configuredFrontendOrigins.length === 1 && DEFAULT_FRONTEND_ORIGINS.has(configuredFrontendOrigins[0]));
+const allowedOriginSet = new Set(configuredFrontendOrigins);
+
+function isAllowedOrigin(origin) {
+  if (!origin) return true;
+  if (allowAnyOrigin) return true;
+  return allowedOriginSet.has(origin);
+}
+
+const corsOptions = {
+  origin(origin, callback) {
+    if (isAllowedOrigin(origin)) return callback(null, true);
+    console.warn(`[cors] blocked origin: ${origin}`);
+    return callback(null, false);
+  },
+  credentials: true,
+};
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { 
-  cors: { 
-    origin: process.env.FRONTEND_URL || 'http://localhost:8080',
-    credentials: true
-  } 
+const io = new Server(server, {
+  cors: {
+    origin(origin, callback) {
+      return callback(null, isAllowedOrigin(origin));
+    },
+    credentials: true,
+  },
 });
 const taskChatRuntimeManager = new TaskChatRuntimeManager({
   logMetric: (event, payload) => logChatMetric(event, payload),
 });
 
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 app.use(express.json());
 
 app.use((req, res, next) => {
+  if (req.method === 'OPTIONS') return next();
   if (req.path === '/api/webhook/github') return next();
   const token = process.env.ACCESS_TOKEN;
   if (!token) return next();
