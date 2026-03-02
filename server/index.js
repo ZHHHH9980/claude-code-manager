@@ -295,7 +295,6 @@ function buildTerminalEmbedPage(sessionName, accessToken) {
     const statusEl = document.getElementById('status');
     const terminalRoot = document.getElementById('terminal');
     const inputUrl = ${JSON.stringify(inputUrl)};
-    const streamUrl = ${JSON.stringify(streamUrl)};
     const resizeUrl = ${JSON.stringify(resizeUrl)};
     let readOffset = 0;
     let polling = false;
