@@ -318,9 +318,9 @@ function buildTerminalEmbedPage(sessionName, accessToken) {
     function stripAnsi(text) {
       if (typeof text !== 'string' || text.length === 0) return '';
       return text
-        .replace(/\u001B\[[0-9;?]*[ -/]*[@-~]/g, '')
-        .replace(/\u001B\][^\u0007]*(\u0007|\u001B\\)/g, '')
-        .replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, '');
+        .replace(/\x1B\[[0-9;?]*[ -/]*[@-~]/g, '')
+        .replace(/\x1B\][^\x07]*(\x07|\x1B\\)/g, '')
+        .replace(/[\x00-\x08\x0B-\x1F\x7F]/g, '');
     }
 
     function append(text) {
