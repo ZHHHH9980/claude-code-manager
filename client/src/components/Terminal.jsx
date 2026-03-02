@@ -38,6 +38,13 @@ export function Terminal({
   const resizeTimerRef = useRef(null);
   const lastAttachAtRef = useRef(0);
   const lastStructuredErrorAtRef = useRef(0);
+  const statusCbRef = useRef(onStatusChange);
+  const fatalCbRef = useRef(onFatalError);
+
+  useEffect(() => {
+    statusCbRef.current = onStatusChange;
+    fatalCbRef.current = onFatalError;
+  }, [onStatusChange, onFatalError]);
 
   useEffect(() => {
     if (!socket || !sessionName || !containerRef.current) return;
@@ -61,7 +68,7 @@ export function Terminal({
       term.unicode.activeVersion = '11';
     } catch {}
     term.open(container);
-    onStatusChange?.('initializing terminal...');
+    statusCbRef.current?.('initializing terminal...');
 
     const syncSize = (force = false) => {
       const cols = term.cols;
@@ -101,8 +108,8 @@ export function Terminal({
         forceRedraw: Boolean(forceRedrawOnAttach),
       });
       scheduleSyncSize(true);
-      if (reason === 'reconnect') onStatusChange?.('reconnecting terminal...');
-      else onStatusChange?.('connecting terminal...');
+      if (reason === 'reconnect') statusCbRef.current?.('reconnecting terminal...');
+      else statusCbRef.current?.('connecting terminal...');
     };
 
     // Set up listeners BEFORE attaching so we don't miss initial data.
@@ -113,9 +120,9 @@ export function Terminal({
       if (err.sessionName && err.sessionName !== sessionName) return;
       term.writeln(`\r\n[terminal error] ${err.message}`);
       const statusText = err.code ? `terminal ${err.code}` : `terminal error: ${err.message}`;
-      onStatusChange?.(statusText);
+      statusCbRef.current?.(statusText);
       if (!err.recoverable || err.code === 'session_not_found' || err.code === 'invalid_session_name') {
-        onFatalError?.(err);
+        fatalCbRef.current?.(err);
       }
     };
     const onTerminalError = (msg) => handleTerminalError(msg, 'legacy');
@@ -125,10 +132,10 @@ export function Terminal({
     };
     const onTerminalReady = (payload) => {
       if (!payload || payload.sessionName !== sessionName) return;
-      onStatusChange?.('terminal connected');
+      statusCbRef.current?.('terminal connected');
     };
     const onSocketConnect = () => attachSession('reconnect');
-    const onSocketDisconnect = () => onStatusChange?.('socket disconnected, waiting reconnect...');
+    const onSocketDisconnect = () => statusCbRef.current?.('socket disconnected, waiting reconnect...');
 
     socket.on(`terminal:data:${sessionName}`, onTerminalData);
     socket.on('terminal:error', onTerminalError);
@@ -175,7 +182,7 @@ export function Terminal({
       socket.off('disconnect', onSocketDisconnect);
       container.removeEventListener('mousedown', focusHandler);
     };
-  }, [socket, sessionName, replayOnAttach, forceRedrawOnAttach, onStatusChange, onFatalError]);
+  }, [socket, sessionName, replayOnAttach, forceRedrawOnAttach]);
 
   return <div ref={containerRef} className="w-full h-full terminal-host" style={{ overflow: 'hidden' }} />;
 }

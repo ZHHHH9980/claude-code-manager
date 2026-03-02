@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { ProjectList } from './components/ProjectList';
 import { TaskBoard } from './components/TaskBoard';
 import { Terminal } from './components/Terminal';
@@ -78,6 +78,10 @@ export default function App() {
     return saved || 'claude';
   });
   const [agentTerminalError, setAgentTerminalError] = useState('');
+  const handleTaskTerminalFatalError = useCallback((err) => {
+    const message = err?.message || 'terminal unavailable';
+    setTaskTerminalStatus(`fatal: ${message}`);
+  }, []);
 
   const [theme, setTheme] = useState(() => {
     const saved = localStorage.getItem('ccm-theme');
@@ -506,10 +510,7 @@ export default function App() {
                 sessionName={activeSession}
                 forceRedrawOnAttach={activeTaskMode !== 'codex'}
                 onStatusChange={setTaskTerminalStatus}
-                onFatalError={(err) => {
-                  const message = err?.message || 'terminal unavailable';
-                  setTaskTerminalStatus(`fatal: ${message}`);
-                }}
+                onFatalError={handleTaskTerminalFatalError}
               />
             </div>
           </div>
