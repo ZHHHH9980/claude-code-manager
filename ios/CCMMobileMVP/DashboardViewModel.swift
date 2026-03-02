@@ -40,6 +40,7 @@ final class DashboardViewModel: ObservableObject {
     private let selectedProjectIDKey = "ccm_selected_project_id"
     private var didBootstrap = false
     private var terminalStreamTask: Task<Void, Never>?
+    private var terminalConnectWatchdogTask: Task<Void, Never>?
 
     private static let fallbackAdapters: [CCMAdapter] = [
         CCMAdapter(
@@ -69,6 +70,7 @@ final class DashboardViewModel: ObservableObject {
 
     deinit {
         terminalStreamTask?.cancel()
+        terminalConnectWatchdogTask?.cancel()
     }
 
     var selectedProject: CCMProject? {
@@ -237,6 +239,8 @@ final class DashboardViewModel: ObservableObject {
     func closeNativeTerminal() {
         terminalStreamTask?.cancel()
         terminalStreamTask = nil
+        terminalConnectWatchdogTask?.cancel()
+        terminalConnectWatchdogTask = nil
         activeNativeTerminalTask = nil
         activeTerminalSessionName = ""
         terminalInput = ""
@@ -353,8 +357,19 @@ final class DashboardViewModel: ObservableObject {
 
     private func beginTerminalStream(sessionName: String) {
         terminalStreamTask?.cancel()
+        terminalConnectWatchdogTask?.cancel()
         isTerminalConnecting = true
         appendTerminalOutput("Connecting to session \(sessionName)...\n")
+
+        terminalConnectWatchdogTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            await MainActor.run {
+                guard let self else { return }
+                guard self.activeTerminalSessionName == sessionName, self.isTerminalConnecting else { return }
+                self.isTerminalConnecting = false
+                self.appendTerminalOutput("[waiting] stream handshake is slow. You can still try sending a command.\n")
+            }
+        }
 
         terminalStreamTask = Task { [weak self] in
             await self?.consumeTerminalStream(sessionName: sessionName)
@@ -364,7 +379,9 @@ final class DashboardViewModel: ObservableObject {
     private func consumeTerminalStream(sessionName: String) async {
         do {
             let client = try makeClient()
-            let bytes = try await client.streamTerminal(sessionName: sessionName)
+            let bytes = try await client.streamTerminal(sessionName: sessionName, replay: false)
+            terminalConnectWatchdogTask?.cancel()
+            terminalConnectWatchdogTask = nil
             isTerminalConnecting = false
 
             var payloadLines: [String] = []
@@ -383,6 +400,8 @@ final class DashboardViewModel: ObservableObject {
         } catch is CancellationError {
             // Sheet closed; do not report as error.
         } catch {
+            terminalConnectWatchdogTask?.cancel()
+            terminalConnectWatchdogTask = nil
             isTerminalConnecting = false
             appendTerminalOutput("\n[stream error] \(error.localizedDescription)\n")
             setStatus(error.localizedDescription, kind: .error)
@@ -398,7 +417,7 @@ final class DashboardViewModel: ObservableObject {
         switch event.type {
         case "output":
             if let chunk = event.chunk {
-                appendTerminalOutput(chunk)
+                appendTerminalOutput(sanitizeTerminalText(chunk))
             }
         case "ready":
             appendTerminalOutput("[connected]\n")
@@ -417,6 +436,26 @@ final class DashboardViewModel: ObservableObject {
         if terminalOutput.count > 200_000 {
             terminalOutput = String(terminalOutput.suffix(150_000))
         }
+    }
+
+    private func sanitizeTerminalText(_ text: String) -> String {
+        var sanitized = text
+        let patterns = [
+            #"\u{001B}\[[0-9;?]*[ -/]*[@-~]"#,
+            #"\u{001B}\][^\u{0007}]*(\u{0007}|\u{001B}\\)"#
+        ]
+        for pattern in patterns {
+            sanitized = sanitized.replacingOccurrences(
+                of: pattern,
+                with: "",
+                options: .regularExpression
+            )
+        }
+        sanitized.removeAll { character in
+            if character == "\n" || character == "\r" || character == "\t" { return false }
+            return character.isASCII && character.unicodeScalars.allSatisfy { $0.value < 0x20 || $0.value == 0x7F }
+        }
+        return sanitized
     }
 
     private func makeClient() throws -> CCMAPIClient {

@@ -315,8 +315,18 @@ function buildTerminalEmbedPage(sessionName, accessToken) {
     const sendBtn = document.getElementById('send');
     const source = new EventSource(${JSON.stringify(streamUrl)});
 
+    function stripAnsi(text) {
+      if (typeof text !== 'string' || text.length === 0) return '';
+      return text
+        .replace(/\u001B\[[0-9;?]*[ -/]*[@-~]/g, '')
+        .replace(/\u001B\][^\u0007]*(\u0007|\u001B\\)/g, '')
+        .replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, '');
+    }
+
     function append(text) {
-      output.textContent += text;
+      const clean = stripAnsi(text);
+      if (!clean) return;
+      output.textContent += clean;
       output.scrollTop = output.scrollHeight;
     }
 
@@ -381,6 +391,8 @@ app.get('/api/terminal/:sessionName/stream', (req, res) => {
   if (!ptyManager.sessionExists(sessionName)) {
     return res.status(404).json({ error: 'session not found' });
   }
+  const replayRaw = String(req.query?.replay ?? '').trim().toLowerCase();
+  const replayEnabled = !(replayRaw === '0' || replayRaw === 'false' || replayRaw === 'no');
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -388,7 +400,7 @@ app.get('/api/terminal/:sessionName/stream', (req, res) => {
   if (typeof res.flushHeaders === 'function') res.flushHeaders();
 
   emitSSE(res, { type: 'ready', sessionName });
-  const replay = ptyManager.getBufferedOutput(sessionName);
+  const replay = replayEnabled ? ptyManager.getBufferedOutput(sessionName) : '';
   if (replay) {
     emitSSE(res, { type: 'output', chunk: replay, replay: true });
   }

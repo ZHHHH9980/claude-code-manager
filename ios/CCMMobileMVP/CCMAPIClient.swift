@@ -129,9 +129,12 @@ struct CCMAPIClient {
         return url
     }
 
-    func streamTerminal(sessionName: String) async throws -> URLSession.AsyncBytes {
+    func streamTerminal(sessionName: String, replay: Bool = false) async throws -> URLSession.AsyncBytes {
         let safeSession = sessionName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sessionName
-        var request = try buildRequest(path: "/api/terminal/\(safeSession)/stream")
+        var request = try buildRequest(
+            path: "/api/terminal/\(safeSession)/stream",
+            queryItems: [URLQueryItem(name: "replay", value: replay ? "1" : "0")]
+        )
         request.timeoutInterval = 1800
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
