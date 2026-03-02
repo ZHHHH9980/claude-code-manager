@@ -33,6 +33,7 @@ function removeSession(sessionName) {
   entry.outputDecoder = null;
   try { entry.exitDisposable?.dispose?.(); } catch {}
   entry.exitDisposable = null;
+  try { entry.listeners?.clear?.(); } catch {}
   sessions.delete(sessionName);
 }
 
@@ -66,6 +67,7 @@ function createSession(sessionName, cwd) {
   const entry = {
     ptyProcess,
     clients: new Set(),
+    listeners: new Set(),
     lastCols: ptyProcess.cols,
     lastRows: ptyProcess.rows,
     closed: false,
@@ -84,6 +86,9 @@ function createSession(sessionName, cwd) {
     }
     for (const socket of entry.clients) {
       try { socket.emit(`terminal:data:${sessionName}`, text); } catch {}
+    }
+    for (const listener of entry.listeners) {
+      try { listener(text); } catch {}
     }
   });
   entry.exitDisposable = ptyProcess.onExit(() => removeSession(sessionName));
@@ -125,6 +130,17 @@ function sendInput(sessionName, data) {
   if (isAlive(entry)) entry.ptyProcess.write(data);
 }
 
+function subscribeOutput(sessionName, listener) {
+  const entry = sessions.get(sessionName);
+  if (!isAlive(entry) || typeof listener !== 'function') {
+    return () => {};
+  }
+  entry.listeners.add(listener);
+  return () => {
+    try { entry.listeners.delete(listener); } catch {}
+  };
+}
+
 function killSession(sessionName) {
   const entry = sessions.get(sessionName);
   if (!entry) return;
@@ -132,6 +148,7 @@ function killSession(sessionName) {
   entry.dataDisposable = null;
   try { entry.exitDisposable?.dispose?.(); } catch {}
   entry.exitDisposable = null;
+  try { entry.listeners?.clear?.(); } catch {}
   entry.closed = true;
   try { entry.ptyProcess.kill(); } catch {}
   sessions.delete(sessionName);
@@ -159,6 +176,7 @@ module.exports = {
   ensureSession,
   sessionExists,
   sendInput,
+  subscribeOutput,
   resizeSession,
   killSession,
   getTmuxAttachCmd,

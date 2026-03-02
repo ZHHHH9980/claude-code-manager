@@ -65,13 +65,21 @@ app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 app.use(express.json());
 
+function isValidAccessToken(req, expectedToken) {
+  const auth = String(req.headers.authorization || '');
+  if (auth.startsWith('Bearer ') && auth.slice(7).trim() === expectedToken) {
+    return true;
+  }
+  const queryToken = typeof req.query?.access_token === 'string' ? req.query.access_token.trim() : '';
+  return queryToken.length > 0 && queryToken === expectedToken;
+}
+
 app.use((req, res, next) => {
   if (req.method === 'OPTIONS') return next();
   if (req.path === '/api/webhook/github') return next();
   const token = process.env.ACCESS_TOKEN;
   if (!token) return next();
-  const auth = req.headers.authorization;
-  if (auth === `Bearer ${token}`) return next();
+  if (isValidAccessToken(req, token)) return next();
   res.status(401).json({ error: 'Unauthorized' });
 });
 
@@ -216,6 +224,229 @@ app.delete('/api/tasks/:id', (req, res) => {
   const ok = db.deleteTask(id);
   if (!ok) return res.status(404).json({ error: 'task not found' });
   res.json({ ok: true, deleted: id });
+});
+
+function normalizeSessionName(raw) {
+  const value = String(raw || '').trim();
+  if (!value) return '';
+  if (!/^[a-zA-Z0-9._:-]+$/.test(value)) return '';
+  return value;
+}
+
+function emitSSE(res, payload) {
+  if (res.writableEnded) return;
+  res.write(`data: ${JSON.stringify(payload)}\n\n`);
+}
+
+function buildTerminalEmbedPage(sessionName, accessToken) {
+  const encodedSession = encodeURIComponent(sessionName);
+  const tokenQuery = accessToken ? `?access_token=${encodeURIComponent(accessToken)}` : '';
+  const streamUrl = `/api/terminal/${encodedSession}/stream${tokenQuery}`;
+  const inputUrl = `/api/terminal/${encodedSession}/input${tokenQuery}`;
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>CCM Terminal Web</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Cascadia Mono", "Segoe UI Mono", monospace;
+      background: #0b111a;
+      color: #dbe5f5;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+    .header {
+      padding: 10px 12px;
+      border-bottom: 1px solid #1f2a37;
+      color: #9fb0c6;
+      font-size: 12px;
+    }
+    #output {
+      flex: 1;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      padding: 12px;
+      line-height: 1.25;
+      font-size: 12px;
+      word-break: break-word;
+    }
+    .bar {
+      border-top: 1px solid #1f2a37;
+      padding: 8px;
+      display: flex;
+      gap: 8px;
+      background: #0f1724;
+    }
+    #cmd {
+      flex: 1;
+      border: 1px solid #243346;
+      background: #111a29;
+      color: #eef3ff;
+      border-radius: 8px;
+      padding: 10px;
+      font: inherit;
+    }
+    button {
+      border: none;
+      border-radius: 8px;
+      background: #167f6d;
+      color: white;
+      padding: 0 14px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">Web Terminal • ${sessionName}</div>
+  <pre id="output"></pre>
+  <div class="bar">
+    <input id="cmd" placeholder="Type command and press Enter" autocomplete="off" autocapitalize="off" />
+    <button id="send">Send</button>
+  </div>
+  <script>
+    const output = document.getElementById('output');
+    const cmd = document.getElementById('cmd');
+    const sendBtn = document.getElementById('send');
+    const source = new EventSource(${JSON.stringify(streamUrl)});
+
+    function append(text) {
+      output.textContent += text;
+      output.scrollTop = output.scrollHeight;
+    }
+
+    source.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data || '{}');
+        if (payload.type === 'output' && typeof payload.chunk === 'string') append(payload.chunk);
+        if (payload.type === 'error' && payload.message) append('\\n[error] ' + payload.message + '\\n');
+        if (payload.type === 'done') append('\\n[session ended]\\n');
+      } catch {}
+    };
+    source.onerror = () => append('\\n[stream disconnected]\\n');
+
+    async function sendInput() {
+      const value = cmd.value;
+      if (!value.trim()) return;
+      cmd.value = '';
+      try {
+        await fetch(${JSON.stringify(inputUrl)}, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ data: value + '\\n' }),
+        });
+      } catch (err) {
+        append('\\n[input failed]\\n');
+      }
+    }
+
+    sendBtn.addEventListener('click', sendInput);
+    cmd.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        sendInput();
+      }
+    });
+  </script>
+</body>
+</html>`;
+}
+
+app.post('/api/tasks/:id/terminal/session', (req, res) => {
+  const { id } = req.params;
+  const task = db.getTask(id);
+  if (!task) return res.status(404).json({ error: 'task not found' });
+  if (task.status !== 'in_progress') {
+    return res.status(400).json({ error: 'task is not running' });
+  }
+  const runtime = ensureTaskProcess(task, { ensurePty: true });
+  if (!runtime) {
+    return res.status(400).json({ error: 'task worktree/repo path missing' });
+  }
+  res.json({
+    sessionName: runtime.sessionName,
+    ready: ptyManager.sessionExists(runtime.sessionName),
+    mode: task.mode || null,
+  });
+});
+
+app.get('/api/terminal/:sessionName/stream', (req, res) => {
+  const sessionName = normalizeSessionName(req.params.sessionName);
+  if (!sessionName) return res.status(400).json({ error: 'invalid session name' });
+  if (!ptyManager.sessionExists(sessionName)) {
+    return res.status(404).json({ error: 'session not found' });
+  }
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  if (typeof res.flushHeaders === 'function') res.flushHeaders();
+
+  emitSSE(res, { type: 'ready', sessionName });
+  const replay = ptyManager.getBufferedOutput(sessionName);
+  if (replay) {
+    emitSSE(res, { type: 'output', chunk: replay, replay: true });
+  }
+
+  const unsubscribe = ptyManager.subscribeOutput(sessionName, (chunk) => {
+    emitSSE(res, { type: 'output', chunk });
+  });
+
+  const heartbeat = setInterval(() => {
+    if (res.writableEnded) return;
+    res.write(': ping\n\n');
+    if (!ptyManager.sessionExists(sessionName)) {
+      emitSSE(res, { type: 'done', message: 'session ended' });
+      cleanup();
+      res.end();
+    }
+  }, 15000);
+
+  const cleanup = () => {
+    clearInterval(heartbeat);
+    unsubscribe();
+  };
+
+  req.on('close', cleanup);
+});
+
+app.post('/api/terminal/:sessionName/input', (req, res) => {
+  const sessionName = normalizeSessionName(req.params.sessionName);
+  if (!sessionName) return res.status(400).json({ error: 'invalid session name' });
+  if (!ptyManager.sessionExists(sessionName)) {
+    return res.status(404).json({ error: 'session not found' });
+  }
+  const data = typeof req.body?.data === 'string' ? req.body.data : '';
+  if (!data) return res.status(400).json({ error: 'input data required' });
+  ptyManager.sendInput(sessionName, data);
+  res.json({ ok: true });
+});
+
+app.post('/api/terminal/:sessionName/resize', (req, res) => {
+  const sessionName = normalizeSessionName(req.params.sessionName);
+  if (!sessionName) return res.status(400).json({ error: 'invalid session name' });
+  if (!ptyManager.sessionExists(sessionName)) {
+    return res.status(404).json({ error: 'session not found' });
+  }
+  const cols = Math.max(40, Math.min(400, Number(req.body?.cols) || 120));
+  const rows = Math.max(10, Math.min(200, Number(req.body?.rows) || 30));
+  ptyManager.resizeSession(sessionName, cols, rows);
+  res.json({ ok: true, cols, rows });
+});
+
+app.get('/api/terminal/:sessionName/embed', (req, res) => {
+  const sessionName = normalizeSessionName(req.params.sessionName);
+  if (!sessionName) return res.status(400).send('invalid session name');
+  if (!ptyManager.sessionExists(sessionName)) {
+    return res.status(404).send('session not found');
+  }
+  const accessToken = typeof req.query?.access_token === 'string' ? req.query.access_token : '';
+  res.type('html').send(buildTerminalEmbedPage(sessionName, accessToken));
 });
 
 app.get('/api/tasks/:id/chat/history', (req, res) => {
