@@ -12,6 +12,7 @@ const db = require('./db');
 const { syncTaskToNotion } = require('./notion-sync');
 const ptyManager = require('./pty-manager');
 const { TaskChatRuntimeManager } = require('./task-chat-runtime');
+const { buildClaudeEnv } = require('./claude-env');
 const { watchProgress, unwatchProgress } = require('./file-watcher');
 const { resolveAdapter, listAdapters } = require('./adapters');
 
@@ -494,9 +495,7 @@ function startClaudeStream({ cwd, message, onProcess, scope, taskId = null, sess
   if (typeof res.flushHeaders === 'function') res.flushHeaders();
   res.write(`data: ${JSON.stringify({ ready: true })}\n\n`);
 
-  const nvmNode = path.join(process.env.HOME || '/root', '.nvm/versions/node/v22.22.0/bin');
-  const env = { ...process.env, PATH: `${nvmNode}:${process.env.PATH}` };
-  if (!env.ANTHROPIC_BASE_URL) env.ANTHROPIC_BASE_URL = 'https://crs.itssx.com/api';
+  const env = buildClaudeEnv();
 
   const args = ['--print', '--allowedTools', 'Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep'];
   if (sessionId) {

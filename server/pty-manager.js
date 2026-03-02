@@ -43,7 +43,9 @@ function createSession(sessionName, cwd) {
 
   const safeCwd = JSON.stringify(cwd || process.env.HOME || '/');
   const bootstrap = [
+    '. ~/.profile 2>/dev/null || true',
     '. ~/.bash_profile 2>/dev/null || true',
+    '. ~/.bashrc 2>/dev/null || true',
     'export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 LC_CTYPE=en_US.UTF-8',
     `cd ${safeCwd}`,
     'exec bash -li',

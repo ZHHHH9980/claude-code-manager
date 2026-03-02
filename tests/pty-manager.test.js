@@ -134,6 +134,7 @@ describe('pty-manager', () => {
     assert.ok(spawnCall, 'pty.spawn should have been called');
     assert.ok(['bash', 'su'].includes(spawnCall.cmd), 'should spawn bash or su');
     const bootstrap = spawnCall.cmd === 'bash' ? spawnCall.args[1] : spawnCall.args[3];
+    assert.ok(String(bootstrap).includes('. ~/.bashrc 2>/dev/null || true'), 'bootstrap should source ~/.bashrc');
     assert.ok(String(bootstrap).includes('cd "/tmp"'), 'bootstrap command should cd into task cwd');
     const opts = spawnCall.opts;
     assert.ok(opts.env, 'spawn options must include env');

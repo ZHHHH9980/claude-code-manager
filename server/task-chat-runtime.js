@@ -1,6 +1,6 @@
-const path = require('path');
 const { spawn } = require('child_process');
 const { StringDecoder } = require('string_decoder');
+const { buildClaudeEnv } = require('./claude-env');
 
 function extractAssistantText(payload) {
   const content = payload?.message?.content;
@@ -30,9 +30,7 @@ class TaskChatRuntime {
   }
 
   spawn() {
-    const nvmNode = path.join(process.env.HOME || '/root', '.nvm/versions/node/v22.22.0/bin');
-    const env = { ...process.env, PATH: `${nvmNode}:${process.env.PATH}` };
-    if (!env.ANTHROPIC_BASE_URL) env.ANTHROPIC_BASE_URL = 'https://crs.itssx.com/api';
+    const env = buildClaudeEnv();
 
     const args = [
       '--print',
