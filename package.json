@@ -11,6 +11,7 @@
     "hooks:uninstall": "git config --unset core.hooksPath || true",
     "ui:mobile:check": "npm --prefix client run mobile:build-check",
     "ui:mobile:watch": "node ./scripts/ui-mobile-watch.mjs",
+    "ios:e2e": "bash ios/scripts/e2e_smoke.sh",
     "mcp:mobile": "npm --prefix client run mcp:mobile",
     "mcp:task-persistence": "npm --prefix client run mcp:task-persistence",
     "mcp:task-hot-session": "npm --prefix client run mcp:task-hot-session"

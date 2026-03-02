@@ -85,3 +85,25 @@
 2. 打开 App 后 `Save & Sync` 成功。
 3. 可看到 Projects/Tasks 数据。
 4. 切换 Project Filter 后任务列表会刷新。
+
+## 8) iOS E2E 冒烟测试（已内置）
+
+如果你不想手动点页面，可以直接跑自动冒烟：
+
+```bash
+cd /opt/claude-code-manager
+npm run ios:e2e
+```
+
+脚本会自动：
+
+1. 编译 iOS App（Simulator）
+2. 启动模拟器并安装 App
+3. 用 E2E 参数启动 App
+4. 自动检查：
+   - 能拉到 projects/tasks
+   - 能拿到 terminal session
+   - `/api/terminal/:session/state` 正常
+   - `/api/terminal/:session/read` 正常
+
+成功时会输出 `"[ios-e2e] PASS"`。
