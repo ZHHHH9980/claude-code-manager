@@ -260,8 +260,32 @@ function buildAdapterLaunchCommand(adapter, model) {
   return `${adapter?.cli || 'claude'} ${args.join(' ')}`.trim();
 }
 
+function shellQuote(value) {
+  const raw = String(value ?? '');
+  return `'${raw.replace(/'/g, `'\"'\"'`)}'`;
+}
+
+function buildAdapterEnvExports(adapter) {
+  if (!adapter || adapter.cli !== 'claude') return '';
+  const env = buildClaudeEnv();
+  const vars = [
+    ['ANTHROPIC_BASE_URL', env.ANTHROPIC_BASE_URL],
+    ['ANTHROPIC_AUTH_TOKEN', env.ANTHROPIC_AUTH_TOKEN],
+    ['ANTHROPIC_API_KEY', env.ANTHROPIC_API_KEY],
+  ];
+  const exports = vars
+    .filter(([, val]) => typeof val === 'string' && val.trim())
+    .map(([key, val]) => `export ${key}=${shellQuote(val)}`)
+    .join('; ');
+  return exports;
+}
+
 function launchAdapterInSession(sessionName, { adapter, model, context }) {
+  const adapterExports = buildAdapterEnvExports(adapter);
   ptyManager.sendInput(sessionName, 'export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 LC_CTYPE=en_US.UTF-8\n');
+  if (adapterExports) {
+    ptyManager.sendInput(sessionName, `${adapterExports}\n`);
+  }
   ptyManager.sendInput(sessionName, `${buildAdapterLaunchCommand(adapter, model)}\n`);
   if (adapter?.autoConfirm?.enabled) {
     const delayMs = Number(adapter?.autoConfirm?.delayMs) || 3000;
