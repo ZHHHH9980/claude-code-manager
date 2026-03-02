@@ -243,43 +243,70 @@ function buildTerminalEmbedPage(sessionName, accessToken) {
   const tokenQuery = accessToken ? `?access_token=${encodeURIComponent(accessToken)}` : '';
   const readBaseUrl = `/api/terminal/${encodedSession}/read${tokenQuery}`;
   const inputUrl = `/api/terminal/${encodedSession}/input${tokenQuery}`;
-  const resizeUrl = `/api/terminal/${encodedSession}/resize${tokenQuery}`;
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <title>CCM Terminal Web</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css" />
   <style>
     :root { color-scheme: dark; }
     body {
       margin: 0;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Cascadia Mono", "Segoe UI Mono", monospace;
-      background: #0b111a;
-      color: #dbe5f5;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      background: #0f1115;
+      color: #e8eaf0;
       display: flex;
       flex-direction: column;
       height: 100vh;
     }
     .topbar {
       padding: 10px 12px;
-      border-bottom: 1px solid #1f2a37;
-      color: #9fb0c6;
+      border-bottom: 1px solid #2a2f3b;
+      color: #c9d0df;
       font-size: 12px;
       display: flex;
       align-items: center;
       justify-content: space-between;
     }
-    #terminal {
+    #output {
       flex: 1;
-      padding: 8px;
-      min-height: 120px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      padding: 10px 12px;
+      line-height: 1.3;
+      font-size: 12px;
     }
     .status {
-      color: #9aa9bf;
+      color: #a0a9bc;
       font-size: 11px;
       white-space: nowrap;
+    }
+    .bar {
+      border-top: 1px solid #2a2f3b;
+      display: flex;
+      gap: 8px;
+      padding: 8px;
+      background: #131722;
+    }
+    #cmd {
+      flex: 1;
+      border: 1px solid #3a4458;
+      background: #0f1115;
+      color: #e8eaf0;
+      border-radius: 8px;
+      padding: 10px;
+      font: inherit;
+      min-width: 0;
+    }
+    #send {
+      border: 1px solid #4a556f;
+      background: #1b2233;
+      color: #f3f5fb;
+      border-radius: 8px;
+      padding: 0 14px;
+      font-size: 12px;
     }
   </style>
 </head>
@@ -288,17 +315,20 @@ function buildTerminalEmbedPage(sessionName, accessToken) {
     <span>Web Terminal • ${sessionName}</span>
     <span id="status" class="status">connecting...</span>
   </div>
-  <div id="terminal"></div>
-  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+  <pre id="output"></pre>
+  <div class="bar">
+    <input id="cmd" placeholder="Type command and press Enter" autocomplete="off" autocapitalize="off" />
+    <button id="send">Send</button>
+  </div>
   <script>
     const statusEl = document.getElementById('status');
-    const terminalRoot = document.getElementById('terminal');
+    const outputEl = document.getElementById('output');
+    const cmdEl = document.getElementById('cmd');
+    const sendEl = document.getElementById('send');
     const inputUrl = ${JSON.stringify(inputUrl)};
-    const resizeUrl = ${JSON.stringify(resizeUrl)};
     let readOffset = 0;
-    let polling = false;
     let pollTimer = null;
+    let pendingPoll = false;
 
     function setStatus(text) {
       statusEl.textContent = text;
@@ -312,6 +342,25 @@ function buildTerminalEmbedPage(sessionName, accessToken) {
       });
     }
 
+    function sanitize(text) {
+      return String(text || '')
+        .replace(/\r\n/g, '\n')
+        .replace(/\r/g, '\n')
+        .replace(/\x1B\[[0-9;?]*[ -/]*[@-~]/g, '')
+        .replace(/\x1B\][^\x07]*(\x07|\x1B\\)/g, '')
+        .replace(/[\x00-\x08\x0B-\x1F\x7F]/g, '');
+    }
+
+    function append(text) {
+      const clean = sanitize(text);
+      if (!clean) return;
+      outputEl.textContent += clean;
+      if (outputEl.textContent.length > 200000) {
+        outputEl.textContent = outputEl.textContent.slice(-150000);
+      }
+      outputEl.scrollTop = outputEl.scrollHeight;
+    }
+
     function buildReadUrl(from, tail) {
       const base = ${JSON.stringify(readBaseUrl)};
       const params = [];
@@ -321,115 +370,64 @@ function buildTerminalEmbedPage(sessionName, accessToken) {
       return base + (base.includes('?') ? '&' : '?') + params.join('&');
     }
 
-    async function pollRead(write, onError) {
-      if (polling) return;
-      polling = true;
+    async function pollRead() {
+      if (pendingPoll) return;
+      pendingPoll = true;
       try {
         const resp = await fetch(buildReadUrl(readOffset, null), { cache: 'no-store' });
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
         const payload = await resp.json();
         if (typeof payload.next === 'number') readOffset = payload.next;
-        if (typeof payload.chunk === 'string' && payload.chunk.length > 0) write(payload.chunk);
+        if (typeof payload.chunk === 'string' && payload.chunk.length > 0) append(payload.chunk);
         setStatus('connected');
       } catch (err) {
-        onError(err && err.message ? err.message : 'read failed');
+        append('\\n[read error] ' + (err && err.message ? err.message : 'read failed') + '\\n');
         setStatus('reconnecting...');
       } finally {
-        polling = false;
+        pendingPoll = false;
+        pollTimer = setTimeout(pollRead, 700);
       }
     }
 
-    async function bootstrapRead(write, onError) {
+    async function bootstrapRead() {
       try {
         const resp = await fetch(buildReadUrl(null, 40000), { cache: 'no-store' });
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
         const payload = await resp.json();
-        if (typeof payload.from === 'number' && payload.from >= 0) {
-          readOffset = payload.from;
-        }
         if (typeof payload.next === 'number') readOffset = payload.next;
-        if (typeof payload.chunk === 'string' && payload.chunk.length > 0) write(payload.chunk);
+        if (typeof payload.chunk === 'string' && payload.chunk.length > 0) append(payload.chunk);
         setStatus('connected');
       } catch (err) {
-        onError(err && err.message ? err.message : 'bootstrap failed');
+        append('\\n[bootstrap error] ' + (err && err.message ? err.message : 'bootstrap failed') + '\\n');
         setStatus('reconnecting...');
       }
-      pollTimer = setInterval(() => pollRead(write, onError), 700);
+      pollTimer = setTimeout(pollRead, 700);
     }
 
-    const xtermReady = typeof window.Terminal === 'function'
-      && window.FitAddon
-      && typeof window.FitAddon.FitAddon === 'function';
-
-    if (!xtermReady) {
-      setStatus('fallback mode');
-      terminalRoot.innerHTML = '<pre id="fb_out" style="margin:0;height:calc(100% - 44px);overflow:auto;white-space:pre-wrap;padding:8px;background:#111;color:#f3f3f3;border-radius:6px"></pre><input id="fb_in" placeholder="type command and press Enter" style="width:100%;box-sizing:border-box;margin-top:8px;padding:10px;border-radius:6px;border:1px solid #444;background:#1b1b1b;color:#eee" />';
-      const out = document.getElementById('fb_out');
-      const input = document.getElementById('fb_in');
-      const write = (chunk) => {
-        out.textContent += String(chunk || '').replace(/\r/g, '\n');
-        out.scrollTop = out.scrollHeight;
-      };
-      bootstrapRead(write, (msg) => write('\\n[error] ' + msg + '\\n'));
-      input.addEventListener('keydown', (event) => {
-        if (event.key !== 'Enter') return;
-        event.preventDefault();
-        const value = input.value;
-        input.value = '';
-        if (!value.trim()) return;
-        write('\\n> ' + value + '\\n');
-        postJSON(inputUrl, { data: value + '\\n' }).catch(() => write('\\n[input failed]\\n'));
-      });
-    } else {
-      const term = new Terminal({
-        convertEol: true,
-        cursorBlink: true,
-        fontSize: 13,
-        fontFamily: 'SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
-        theme: {
-          background: '#f7f7f7',
-          foreground: '#111111',
-          cursor: '#111111'
-        },
-        scrollback: 5000
-      });
-      const fitAddon = new FitAddon.FitAddon();
-      term.loadAddon(fitAddon);
-      term.open(terminalRoot);
-      fitAddon.fit();
-      term.focus();
-
-      const sendResize = async () => {
-        fitAddon.fit();
-        try {
-          await postJSON(resizeUrl, { cols: term.cols || 120, rows: term.rows || 30 });
-        } catch {}
-      };
-
-      let resizeTimer = null;
-      const scheduleResize = () => {
-        clearTimeout(resizeTimer);
-        resizeTimer = setTimeout(() => { sendResize(); }, 120);
-      };
-
-      bootstrapRead(
-        (chunk) => term.write(chunk),
-        (msg) => { term.writeln(''); term.writeln('[error] ' + msg); }
-      );
-
-      term.onData((data) => {
-        postJSON(inputUrl, { data }).catch(() => {
-          term.writeln('');
-          term.writeln('[input failed]');
-        });
-      });
-
-      window.addEventListener('resize', scheduleResize);
-      window.addEventListener('beforeunload', () => {
-        if (pollTimer) clearInterval(pollTimer);
-      });
-      sendResize();
+    async function sendCurrentInput() {
+      const value = cmdEl.value || '';
+      cmdEl.value = '';
+      if (!value.trim()) return;
+      append('\\n> ' + value + '\\n');
+      try {
+        await postJSON(inputUrl, { data: value + '\\n' });
+      } catch {
+        append('\\n[input failed]\\n');
+      }
     }
+
+    sendEl.addEventListener('click', sendCurrentInput);
+    cmdEl.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      sendCurrentInput();
+    });
+
+    window.addEventListener('beforeunload', () => {
+      if (pollTimer) clearTimeout(pollTimer);
+    });
+
+    bootstrapRead();
   </script>
 </body>
 </html>`;

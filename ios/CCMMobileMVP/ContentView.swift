@@ -62,7 +62,6 @@ struct ContentView: View {
                 .padding(.vertical, 12)
                 .padding(.bottom, 26)
             }
-            .scrollDisabled(selectedPane == .tasks)
         }
         .task {
             await viewModel.bootstrapIfNeeded()
@@ -406,6 +405,32 @@ struct ContentView: View {
                     .buttonBorderShape(.capsule)
                     .tint(CCMColors.accentOrange)
                 }
+
+                Button {
+                    Task {
+                        await viewModel.openTaskChat(task)
+                    }
+                } label: {
+                    Label("Open Chat", systemImage: "bubble.left.and.bubble.right")
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+                .tint(CCMColors.textSecondary)
+            } else {
+                Button {
+                    Task {
+                        await viewModel.openTaskChat(task)
+                    }
+                } label: {
+                    Label("Open Chat", systemImage: "bubble.left.and.bubble.right")
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+                .tint(CCMColors.textSecondary)
             }
         }
         .padding(12)
