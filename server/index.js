@@ -233,6 +233,38 @@ function normalizeSessionName(raw) {
   return value;
 }
 
+function getTerminalState(sessionName) {
+  const exists = ptyManager.sessionExists(sessionName);
+  const entry = exists ? ptyManager.sessions.get(sessionName) : null;
+  const tasks = db.getTasks();
+  const owningTask = tasks.find((task) => task?.pty_session === sessionName) || null;
+  const owningRunningTask = tasks.find(
+    (task) => task?.pty_session === sessionName && task?.status === 'in_progress'
+  ) || null;
+  const output = exists ? ptyManager.getBufferedOutput(sessionName) : '';
+
+  return {
+    sessionName,
+    exists,
+    state: exists ? 'attached' : 'missing',
+    code: exists ? 'ok' : 'session_not_found',
+    attachedClients: exists ? Number(entry?.clients?.size || 0) : 0,
+    bufferBytes: output.length,
+    taskId: owningTask?.id || null,
+    taskStatus: owningTask?.status || null,
+    runningTaskId: owningRunningTask?.id || null,
+    recoverable: exists,
+  };
+}
+
+function sendTerminalJSONError(res, httpStatus, code, message, extra = {}) {
+  res.status(httpStatus).json({
+    error: message,
+    code,
+    ...extra,
+  });
+}
+
 function emitSSE(res, payload) {
   if (res.writableEnded) return;
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
@@ -329,9 +361,17 @@ function buildTerminalEmbedPage(sessionName, accessToken) {
     let readOffset = 0;
     let pollTimer = null;
     let pendingPoll = false;
+    let stopped = false;
 
     function setStatus(text) {
       statusEl.textContent = text;
+    }
+
+    function stopPolling(statusText, logText) {
+      stopped = true;
+      if (pollTimer) clearTimeout(pollTimer);
+      if (statusText) setStatus(statusText);
+      if (logText) append('\\n[' + logText + ']\\n');
     }
 
     async function postJSON(url, payload) {
@@ -371,11 +411,22 @@ function buildTerminalEmbedPage(sessionName, accessToken) {
     }
 
     async function pollRead() {
+      if (stopped) return;
       if (pendingPoll) return;
       pendingPoll = true;
       try {
         const resp = await fetch(buildReadUrl(readOffset, null), { cache: 'no-store' });
-        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        if (!resp.ok) {
+          if (resp.status === 401) {
+            stopPolling('auth failed', 'unauthorized: check ACCESS_TOKEN');
+            return;
+          }
+          if (resp.status === 404) {
+            stopPolling('session missing', 'session not found; restart the task terminal');
+            return;
+          }
+          throw new Error('HTTP ' + resp.status);
+        }
         const payload = await resp.json();
         if (typeof payload.next === 'number') readOffset = payload.next;
         if (typeof payload.chunk === 'string' && payload.chunk.length > 0) append(payload.chunk);
@@ -385,14 +436,24 @@ function buildTerminalEmbedPage(sessionName, accessToken) {
         setStatus('reconnecting...');
       } finally {
         pendingPoll = false;
-        pollTimer = setTimeout(pollRead, 700);
+        if (!stopped) pollTimer = setTimeout(pollRead, 700);
       }
     }
 
     async function bootstrapRead() {
       try {
         const resp = await fetch(buildReadUrl(null, 40000), { cache: 'no-store' });
-        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        if (!resp.ok) {
+          if (resp.status === 401) {
+            stopPolling('auth failed', 'unauthorized: check ACCESS_TOKEN');
+            return;
+          }
+          if (resp.status === 404) {
+            stopPolling('session missing', 'session not found; restart the task terminal');
+            return;
+          }
+          throw new Error('HTTP ' + resp.status);
+        }
         const payload = await resp.json();
         if (typeof payload.next === 'number') readOffset = payload.next;
         if (typeof payload.chunk === 'string' && payload.chunk.length > 0) append(payload.chunk);
@@ -401,16 +462,31 @@ function buildTerminalEmbedPage(sessionName, accessToken) {
         append('\\n[bootstrap error] ' + (err && err.message ? err.message : 'bootstrap failed') + '\\n');
         setStatus('reconnecting...');
       }
-      pollTimer = setTimeout(pollRead, 700);
+      if (!stopped) pollTimer = setTimeout(pollRead, 700);
     }
 
     async function sendCurrentInput() {
+      if (stopped) {
+        append('\\n[terminal unavailable; reopen task terminal]\\n');
+        return;
+      }
       const value = cmdEl.value || '';
       cmdEl.value = '';
       if (!value.trim()) return;
       append('\\n> ' + value + '\\n');
       try {
-        await postJSON(inputUrl, { data: value + '\\n' });
+        const resp = await postJSON(inputUrl, { data: value + '\\n' });
+        if (!resp.ok) {
+          if (resp.status === 401) {
+            stopPolling('auth failed', 'input rejected: unauthorized');
+            return;
+          }
+          if (resp.status === 404) {
+            stopPolling('session missing', 'input rejected: session not found');
+            return;
+          }
+          throw new Error('HTTP ' + resp.status);
+        }
       } catch {
         append('\\n[input failed]\\n');
       }
@@ -451,11 +527,27 @@ app.post('/api/tasks/:id/terminal/session', (req, res) => {
   });
 });
 
+app.get('/api/terminal/:sessionName/state', (req, res) => {
+  const sessionName = normalizeSessionName(req.params.sessionName);
+  if (!sessionName) {
+    return sendTerminalJSONError(res, 400, 'invalid_session_name', 'invalid session name');
+  }
+  res.json(getTerminalState(sessionName));
+});
+
 app.get('/api/terminal/:sessionName/stream', (req, res) => {
   const sessionName = normalizeSessionName(req.params.sessionName);
-  if (!sessionName) return res.status(400).json({ error: 'invalid session name' });
+  if (!sessionName) {
+    return sendTerminalJSONError(res, 400, 'invalid_session_name', 'invalid session name');
+  }
   if (!ptyManager.sessionExists(sessionName)) {
-    return res.status(404).json({ error: 'session not found' });
+    return sendTerminalJSONError(
+      res,
+      404,
+      'session_not_found',
+      'session not found',
+      { terminal: getTerminalState(sessionName) }
+    );
   }
   const replayRaw = String(req.query?.replay ?? '').trim().toLowerCase();
   const replayEnabled = !(replayRaw === '0' || replayRaw === 'false' || replayRaw === 'no');
@@ -502,21 +594,39 @@ app.get('/api/terminal/:sessionName/stream', (req, res) => {
 
 app.post('/api/terminal/:sessionName/input', (req, res) => {
   const sessionName = normalizeSessionName(req.params.sessionName);
-  if (!sessionName) return res.status(400).json({ error: 'invalid session name' });
+  if (!sessionName) {
+    return sendTerminalJSONError(res, 400, 'invalid_session_name', 'invalid session name');
+  }
   if (!ptyManager.sessionExists(sessionName)) {
-    return res.status(404).json({ error: 'session not found' });
+    return sendTerminalJSONError(
+      res,
+      404,
+      'session_not_found',
+      'session not found',
+      { terminal: getTerminalState(sessionName) }
+    );
   }
   const data = typeof req.body?.data === 'string' ? req.body.data : '';
-  if (!data) return res.status(400).json({ error: 'input data required' });
+  if (!data) {
+    return sendTerminalJSONError(res, 400, 'input_required', 'input data required');
+  }
   ptyManager.sendInput(sessionName, data);
   res.json({ ok: true });
 });
 
 app.post('/api/terminal/:sessionName/resize', (req, res) => {
   const sessionName = normalizeSessionName(req.params.sessionName);
-  if (!sessionName) return res.status(400).json({ error: 'invalid session name' });
+  if (!sessionName) {
+    return sendTerminalJSONError(res, 400, 'invalid_session_name', 'invalid session name');
+  }
   if (!ptyManager.sessionExists(sessionName)) {
-    return res.status(404).json({ error: 'session not found' });
+    return sendTerminalJSONError(
+      res,
+      404,
+      'session_not_found',
+      'session not found',
+      { terminal: getTerminalState(sessionName) }
+    );
   }
   const cols = Math.max(40, Math.min(400, Number(req.body?.cols) || 120));
   const rows = Math.max(10, Math.min(200, Number(req.body?.rows) || 30));
@@ -526,9 +636,17 @@ app.post('/api/terminal/:sessionName/resize', (req, res) => {
 
 app.get('/api/terminal/:sessionName/read', (req, res) => {
   const sessionName = normalizeSessionName(req.params.sessionName);
-  if (!sessionName) return res.status(400).json({ error: 'invalid session name' });
+  if (!sessionName) {
+    return sendTerminalJSONError(res, 400, 'invalid_session_name', 'invalid session name');
+  }
   if (!ptyManager.sessionExists(sessionName)) {
-    return res.status(404).json({ error: 'session not found' });
+    return sendTerminalJSONError(
+      res,
+      404,
+      'session_not_found',
+      'session not found',
+      { terminal: getTerminalState(sessionName) }
+    );
   }
   const output = ptyManager.getBufferedOutput(sessionName) || '';
   const rawFrom = Number(req.query?.from);
@@ -551,9 +669,9 @@ app.get('/api/terminal/:sessionName/read', (req, res) => {
 
 app.get('/api/terminal/:sessionName/embed', (req, res) => {
   const sessionName = normalizeSessionName(req.params.sessionName);
-  if (!sessionName) return res.status(400).send('invalid session name');
+  if (!sessionName) return res.status(400).type('text/plain').send('invalid session name');
   if (!ptyManager.sessionExists(sessionName)) {
-    return res.status(404).send('session not found');
+    return res.status(404).type('text/plain').send('session not found');
   }
   const accessToken = typeof req.query?.access_token === 'string' ? req.query.access_token : '';
   res.type('html').send(buildTerminalEmbedPage(sessionName, accessToken));
