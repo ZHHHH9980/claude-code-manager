@@ -295,26 +295,10 @@ function buildTerminalEmbedPage(sessionName, accessToken) {
   <script>
     const statusEl = document.getElementById('status');
     const terminalRoot = document.getElementById('terminal');
-    const term = new Terminal({
-      convertEol: true,
-      cursorBlink: true,
-      fontSize: 13,
-      fontFamily: 'SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
-      theme: {
-        background: '#f7f7f7',
-        foreground: '#111111',
-        cursor: '#111111'
-      },
-      scrollback: 5000
-    });
-    const fitAddon = new FitAddon.FitAddon();
-    term.loadAddon(fitAddon);
-    term.open(terminalRoot);
-    fitAddon.fit();
-    term.focus();
-
+    const inputUrl = ${JSON.stringify(inputUrl)};
+    const streamUrl = ${JSON.stringify(streamUrl)};
+    const resizeUrl = ${JSON.stringify(resizeUrl)};
     let source = null;
-    let resizeTimer = null;
 
     function setStatus(text) {
       statusEl.textContent = text;
@@ -328,32 +312,17 @@ function buildTerminalEmbedPage(sessionName, accessToken) {
       });
     }
 
-    async function sendResize() {
-      fitAddon.fit();
-      try {
-        await postJSON(${JSON.stringify(resizeUrl)}, { cols: term.cols || 120, rows: term.rows || 30 });
-      } catch {}
-    }
-
-    function scheduleResize() {
-      clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(() => { sendResize(); }, 120);
-    }
-
-    function connectStream() {
+    function connectStream(write, onError) {
       if (source) {
         try { source.close(); } catch {}
       }
-      source = new EventSource(${JSON.stringify(streamUrl)});
+      source = new EventSource(streamUrl);
       source.onmessage = (event) => {
         let payload = {};
         try { payload = JSON.parse(event.data || '{}'); } catch {}
         if (payload.type === 'ready') setStatus('connected');
-        if (payload.type === 'output' && typeof payload.chunk === 'string') term.write(payload.chunk);
-        if (payload.type === 'error') {
-          term.writeln('');
-          term.writeln('[error] ' + (payload.message || 'unknown'));
-        }
+        if (payload.type === 'output' && typeof payload.chunk === 'string') write(payload.chunk);
+        if (payload.type === 'error') onError(payload.message || 'unknown');
         if (payload.type === 'done') setStatus('session ended');
       };
       source.onerror = () => {
@@ -361,16 +330,76 @@ function buildTerminalEmbedPage(sessionName, accessToken) {
       };
     }
 
-    term.onData((data) => {
-      postJSON(${JSON.stringify(inputUrl)}, { data }).catch(() => {
-        term.writeln('');
-        term.writeln('[input failed]');
-      });
-    });
+    const xtermReady = typeof window.Terminal === 'function'
+      && window.FitAddon
+      && typeof window.FitAddon.FitAddon === 'function';
 
-    window.addEventListener('resize', scheduleResize);
-    connectStream();
-    sendResize();
+    if (!xtermReady) {
+      setStatus('fallback mode');
+      terminalRoot.innerHTML = '<pre id="fb_out" style="margin:0;height:calc(100% - 44px);overflow:auto;white-space:pre-wrap;padding:8px;background:#111;color:#f3f3f3;border-radius:6px"></pre><input id="fb_in" placeholder="type command and press Enter" style="width:100%;box-sizing:border-box;margin-top:8px;padding:10px;border-radius:6px;border:1px solid #444;background:#1b1b1b;color:#eee" />';
+      const out = document.getElementById('fb_out');
+      const input = document.getElementById('fb_in');
+      const write = (chunk) => {
+        out.textContent += String(chunk || '').replace(/\r/g, '\n');
+        out.scrollTop = out.scrollHeight;
+      };
+      connectStream(write, (msg) => write('\\n[error] ' + msg + '\\n'));
+      input.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter') return;
+        event.preventDefault();
+        const value = input.value;
+        input.value = '';
+        if (!value.trim()) return;
+        write('\\n> ' + value + '\\n');
+        postJSON(inputUrl, { data: value + '\\n' }).catch(() => write('\\n[input failed]\\n'));
+      });
+    } else {
+      const term = new Terminal({
+        convertEol: true,
+        cursorBlink: true,
+        fontSize: 13,
+        fontFamily: 'SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
+        theme: {
+          background: '#f7f7f7',
+          foreground: '#111111',
+          cursor: '#111111'
+        },
+        scrollback: 5000
+      });
+      const fitAddon = new FitAddon.FitAddon();
+      term.loadAddon(fitAddon);
+      term.open(terminalRoot);
+      fitAddon.fit();
+      term.focus();
+
+      const sendResize = async () => {
+        fitAddon.fit();
+        try {
+          await postJSON(resizeUrl, { cols: term.cols || 120, rows: term.rows || 30 });
+        } catch {}
+      };
+
+      let resizeTimer = null;
+      const scheduleResize = () => {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => { sendResize(); }, 120);
+      };
+
+      connectStream(
+        (chunk) => term.write(chunk),
+        (msg) => { term.writeln(''); term.writeln('[error] ' + msg); }
+      );
+
+      term.onData((data) => {
+        postJSON(inputUrl, { data }).catch(() => {
+          term.writeln('');
+          term.writeln('[input failed]');
+        });
+      });
+
+      window.addEventListener('resize', scheduleResize);
+      sendResize();
+    }
   </script>
 </body>
 </html>`;
