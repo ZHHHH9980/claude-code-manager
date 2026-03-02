@@ -344,11 +344,11 @@ function buildTerminalEmbedPage(sessionName, accessToken) {
 
     function sanitize(text) {
       return String(text || '')
-        .replace(/\r\n/g, '\n')
-        .replace(/\r/g, '\n')
-        .replace(/\x1B\[[0-9;?]*[ -/]*[@-~]/g, '')
-        .replace(/\x1B\][^\x07]*(\x07|\x1B\\)/g, '')
-        .replace(/[\x00-\x08\x0B-\x1F\x7F]/g, '');
+        .replace(/\\r\\n/g, '\n')
+        .replace(/\\r/g, '\n')
+        .replace(/\\x1B\\[[0-9;?]*[ -/]*[@-~]/g, '')
+        .replace(/\\x1B\\][^\\x07]*(\\x07|\\x1B\\\\)/g, '')
+        .replace(/[\\x00-\\x08\\x0B-\\x1F\\x7F]/g, '');
     }
 
     function append(text) {
