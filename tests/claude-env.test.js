@@ -26,7 +26,7 @@ describe('claude-env', () => {
 
     assert.equal(env.ANTHROPIC_BASE_URL, 'https://new.example.com/api');
     assert.equal(env.ANTHROPIC_AUTH_TOKEN, 'new-token');
-    assert.equal(env.ANTHROPIC_API_KEY, 'new-token');
+    assert.equal(env.ANTHROPIC_API_KEY, undefined);
     assert.ok(env.PATH.startsWith(path.join(tmpHome, '.nvm/versions/node/v22.22.0/bin')));
   });
 
@@ -40,5 +40,6 @@ describe('claude-env', () => {
 
     assert.equal(env.ANTHROPIC_BASE_URL, 'https://env.example.com/api');
     assert.equal(env.ANTHROPIC_AUTH_TOKEN, 'env-token');
+    assert.equal(env.ANTHROPIC_API_KEY, undefined);
   });
 });

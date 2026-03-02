@@ -268,16 +268,15 @@ function shellQuote(value) {
 function buildAdapterEnvExports(adapter) {
   if (!adapter || adapter.cli !== 'claude') return '';
   const env = buildClaudeEnv();
-  const vars = [
+  const exports = [
     ['ANTHROPIC_BASE_URL', env.ANTHROPIC_BASE_URL],
     ['ANTHROPIC_AUTH_TOKEN', env.ANTHROPIC_AUTH_TOKEN],
-    ['ANTHROPIC_API_KEY', env.ANTHROPIC_API_KEY],
-  ];
-  const exports = vars
+  ]
     .filter(([, val]) => typeof val === 'string' && val.trim())
     .map(([key, val]) => `export ${key}=${shellQuote(val)}`)
     .join('; ');
-  return exports;
+  const unsets = 'unset ANTHROPIC_API_KEY APIKEY API_KEY';
+  return exports ? `${exports}; ${unsets}` : unsets;
 }
 
 function launchAdapterInSession(sessionName, { adapter, model, context }) {

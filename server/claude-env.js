@@ -85,24 +85,26 @@ function buildClaudeEnv(baseEnv = process.env, { homeDir = process.env.HOME } = 
     env.CLAUDE_CODE_API_URL,
   ]);
 
-  const apiKey = firstNonEmpty([
+  const token = firstNonEmpty([
     shellOverrides.APIKEY,
     shellOverrides.API_KEY,
     shellOverrides.CLAUDE_CODE_API_KEY,
     shellOverrides.ANTHROPIC_AUTH_TOKEN,
     shellOverrides.ANTHROPIC_API_KEY,
-    env.ANTHROPIC_AUTH_TOKEN,
-    env.ANTHROPIC_API_KEY,
     env.APIKEY,
     env.API_KEY,
     env.CLAUDE_CODE_API_KEY,
+    env.ANTHROPIC_AUTH_TOKEN,
+    env.ANTHROPIC_API_KEY,
   ]);
 
   if (baseUrl) env.ANTHROPIC_BASE_URL = baseUrl;
-  if (apiKey) {
-    env.ANTHROPIC_AUTH_TOKEN = apiKey;
-    if (!env.ANTHROPIC_API_KEY) env.ANTHROPIC_API_KEY = apiKey;
+  if (token) {
+    env.ANTHROPIC_AUTH_TOKEN = token;
   }
+  delete env.ANTHROPIC_API_KEY;
+  delete env.APIKEY;
+  delete env.API_KEY;
 
   return env;
 }
