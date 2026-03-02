@@ -69,6 +69,19 @@ struct CCMTerminalReadResponse: Codable, Hashable {
     let chunk: String
 }
 
+struct CCMTerminalStateResponse: Codable, Hashable {
+    let sessionName: String
+    let exists: Bool
+    let state: String
+    let code: String
+    let attachedClients: Int
+    let bufferBytes: Int
+    let taskId: String?
+    let taskStatus: String?
+    let runningTaskId: String?
+    let recoverable: Bool
+}
+
 struct CCMWebTerminalDestination: Identifiable, Hashable {
     let id: String
     let title: String

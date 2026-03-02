@@ -98,6 +98,11 @@ struct ContentView: View {
         .sheet(item: $viewModel.activeChatTask) { task in
             taskChatSheet(task: task)
         }
+        .sheet(item: $viewModel.activeNativeTerminalTask, onDismiss: {
+            viewModel.closeNativeTerminal()
+        }) { task in
+            nativeTerminalSheet(task: task)
+        }
         .sheet(item: $viewModel.activeWebTerminal, onDismiss: {
             viewModel.closeWebTerminal()
         }) { destination in

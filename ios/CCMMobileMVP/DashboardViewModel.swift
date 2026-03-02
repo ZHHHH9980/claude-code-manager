@@ -41,6 +41,7 @@ final class DashboardViewModel: ObservableObject {
     private var didBootstrap = false
     private var terminalPollTask: Task<Void, Never>?
     private var terminalReadOffset = 0
+    private var lastTerminalPollErrorMessage = ""
 
     private static let fallbackAdapters: [CCMAdapter] = [
         CCMAdapter(
@@ -217,7 +218,31 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func openNativeTerminal(_ task: CCMTask) async {
-        await openWebTerminal(task, label: "Native")
+        do {
+            let client = try makeClient()
+            let response = try await client.ensureTaskTerminalSession(taskID: task.id)
+            guard let sessionName = response.sessionName, !sessionName.isEmpty else {
+                throw CCMAPIClientError.terminalSessionMissing
+            }
+
+            let state = try await client.fetchTerminalState(sessionName: sessionName)
+            guard state.exists else {
+                throw CCMAPIClientError.chatRuntimeError("Terminal session missing. Restart this task terminal first.")
+            }
+
+            activeWebTerminal = nil
+            activeNativeTerminalTask = task
+            activeTerminalSessionName = sessionName
+            terminalOutput = ""
+            terminalInput = ""
+            terminalReadOffset = 0
+            lastTerminalPollErrorMessage = ""
+
+            beginTerminalPolling(sessionName: sessionName)
+            setStatus("Opened native terminal for \(task.title).", kind: .success)
+        } catch {
+            setStatus(error.localizedDescription, kind: .error)
+        }
     }
 
     func closeNativeTerminal() {
@@ -227,6 +252,7 @@ final class DashboardViewModel: ObservableObject {
         activeTerminalSessionName = ""
         terminalInput = ""
         terminalReadOffset = 0
+        lastTerminalPollErrorMessage = ""
         isTerminalConnecting = false
         isTerminalSending = false
     }
@@ -259,6 +285,10 @@ final class DashboardViewModel: ObservableObject {
             let response = try await client.ensureTaskTerminalSession(taskID: task.id)
             guard let sessionName = response.sessionName, !sessionName.isEmpty else {
                 throw CCMAPIClientError.terminalSessionMissing
+            }
+            let state = try await client.fetchTerminalState(sessionName: sessionName)
+            guard state.exists else {
+                throw CCMAPIClientError.chatRuntimeError("Terminal session missing. Restart this task terminal first.")
             }
             let baseURL = try client.terminalEmbedURL(sessionName: sessionName, includeAccessTokenInQuery: true)
             var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
@@ -365,7 +395,24 @@ final class DashboardViewModel: ObservableObject {
             guard let self else { return }
             do {
                 let client = try self.makeClient()
-                var connected = false
+                do {
+                    let bootstrap = try await client.readTerminalOutput(
+                        sessionName: sessionName,
+                        tail: 40_000
+                    )
+                    self.terminalReadOffset = max(self.terminalReadOffset, bootstrap.next)
+                    let initial = self.sanitizeTerminalText(bootstrap.chunk)
+                    if !initial.isEmpty {
+                        self.appendTerminalOutput(initial)
+                    }
+                    self.isTerminalConnecting = false
+                    self.appendTerminalOutput("[connected]\n")
+                } catch {
+                    if self.handleTerminalPollingError(error, duringConnect: true) {
+                        return
+                    }
+                }
+
                 while !Task.isCancelled, self.activeTerminalSessionName == sessionName {
                     do {
                         let payload = try await client.readTerminalOutput(
@@ -373,21 +420,14 @@ final class DashboardViewModel: ObservableObject {
                             from: self.terminalReadOffset
                         )
                         self.terminalReadOffset = max(self.terminalReadOffset, payload.next)
-                        if !connected {
-                            connected = true
-                            self.isTerminalConnecting = false
-                            self.appendTerminalOutput("[connected]\n")
-                        }
                         let chunk = self.sanitizeTerminalText(payload.chunk)
                         if !chunk.isEmpty {
                             self.appendTerminalOutput(chunk)
                         }
                     } catch {
-                        if !connected {
-                            self.isTerminalConnecting = false
-                            self.appendTerminalOutput("[connect error] \(error.localizedDescription)\n")
+                        if self.handleTerminalPollingError(error, duringConnect: false) {
+                            return
                         }
-                        self.setStatus(error.localizedDescription, kind: .error)
                     }
                     try? await Task.sleep(nanoseconds: 800_000_000)
                 }
@@ -397,6 +437,34 @@ final class DashboardViewModel: ObservableObject {
                 self.setStatus(error.localizedDescription, kind: .error)
             }
         }
+    }
+
+    private func handleTerminalPollingError(_ error: Error, duringConnect: Bool) -> Bool {
+        if case let CCMAPIClientError.httpError(code, _) = error {
+            if code == 401 {
+                isTerminalConnecting = false
+                setStatus("Terminal auth failed (401). Check ACCESS_TOKEN.", kind: .error)
+                appendTerminalOutput("[auth failed] ACCESS_TOKEN is invalid or missing.\n")
+                return true
+            }
+            if code == 404 {
+                isTerminalConnecting = false
+                setStatus("Terminal session missing (404). Restart this task terminal.", kind: .warning)
+                appendTerminalOutput("[session missing] reopen terminal from task card.\n")
+                return true
+            }
+        }
+
+        if duringConnect {
+            isTerminalConnecting = false
+        }
+        let message = error.localizedDescription
+        if message != lastTerminalPollErrorMessage {
+            appendTerminalOutput("[connect error] \(message)\n")
+            lastTerminalPollErrorMessage = message
+        }
+        setStatus(message, kind: .error)
+        return false
     }
 
     private func appendTerminalOutput(_ text: String) {

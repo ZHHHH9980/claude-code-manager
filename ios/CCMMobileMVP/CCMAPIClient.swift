@@ -114,6 +114,12 @@ struct CCMAPIClient {
         return try decoder.decode(CCMEnsureTaskTerminalResponse.self, from: data)
     }
 
+    func fetchTerminalState(sessionName: String) async throws -> CCMTerminalStateResponse {
+        let safeSession = sessionName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sessionName
+        let data = try await request(path: "/api/terminal/\(safeSession)/state")
+        return try decoder.decode(CCMTerminalStateResponse.self, from: data)
+    }
+
     func terminalEmbedURL(sessionName: String, includeAccessTokenInQuery: Bool = true) throws -> URL {
         let safeSession = sessionName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sessionName
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
@@ -169,11 +175,22 @@ struct CCMAPIClient {
         )
     }
 
-    func readTerminalOutput(sessionName: String, from: Int) async throws -> CCMTerminalReadResponse {
+    func readTerminalOutput(
+        sessionName: String,
+        from: Int? = nil,
+        tail: Int? = nil
+    ) async throws -> CCMTerminalReadResponse {
         let safeSession = sessionName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sessionName
+        var queryItems: [URLQueryItem] = []
+        if let from {
+            queryItems.append(URLQueryItem(name: "from", value: String(max(0, from))))
+        }
+        if let tail, tail > 0 {
+            queryItems.append(URLQueryItem(name: "tail", value: String(tail)))
+        }
         let data = try await request(
             path: "/api/terminal/\(safeSession)/read",
-            queryItems: [URLQueryItem(name: "from", value: String(max(0, from)))]
+            queryItems: queryItems
         )
         return try decoder.decode(CCMTerminalReadResponse.self, from: data)
     }
