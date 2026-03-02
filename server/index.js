@@ -241,8 +241,7 @@ function emitSSE(res, payload) {
 function buildTerminalEmbedPage(sessionName, accessToken) {
   const encodedSession = encodeURIComponent(sessionName);
   const tokenQuery = accessToken ? `?access_token=${encodeURIComponent(accessToken)}` : '';
-  const streamQuery = tokenQuery ? `${tokenQuery}&replay=1&replay_bytes=40000` : '?replay=1&replay_bytes=40000';
-  const streamUrl = `/api/terminal/${encodedSession}/stream${streamQuery}`;
+  const readBaseUrl = `/api/terminal/${encodedSession}/read${tokenQuery}`;
   const inputUrl = `/api/terminal/${encodedSession}/input${tokenQuery}`;
   const resizeUrl = `/api/terminal/${encodedSession}/resize${tokenQuery}`;
   return `<!doctype html>
@@ -298,7 +297,9 @@ function buildTerminalEmbedPage(sessionName, accessToken) {
     const inputUrl = ${JSON.stringify(inputUrl)};
     const streamUrl = ${JSON.stringify(streamUrl)};
     const resizeUrl = ${JSON.stringify(resizeUrl)};
-    let source = null;
+    let readOffset = 0;
+    let polling = false;
+    let pollTimer = null;
 
     function setStatus(text) {
       statusEl.textContent = text;
@@ -312,22 +313,49 @@ function buildTerminalEmbedPage(sessionName, accessToken) {
       });
     }
 
-    function connectStream(write, onError) {
-      if (source) {
-        try { source.close(); } catch {}
+    function buildReadUrl(from, tail) {
+      const base = ${JSON.stringify(readBaseUrl)};
+      const params = [];
+      if (Number.isFinite(from) && from >= 0) params.push('from=' + encodeURIComponent(String(from)));
+      if (Number.isFinite(tail) && tail > 0) params.push('tail=' + encodeURIComponent(String(tail)));
+      if (params.length === 0) return base;
+      return base + (base.includes('?') ? '&' : '?') + params.join('&');
+    }
+
+    async function pollRead(write, onError) {
+      if (polling) return;
+      polling = true;
+      try {
+        const resp = await fetch(buildReadUrl(readOffset, null), { cache: 'no-store' });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const payload = await resp.json();
+        if (typeof payload.next === 'number') readOffset = payload.next;
+        if (typeof payload.chunk === 'string' && payload.chunk.length > 0) write(payload.chunk);
+        setStatus('connected');
+      } catch (err) {
+        onError(err && err.message ? err.message : 'read failed');
+        setStatus('reconnecting...');
+      } finally {
+        polling = false;
       }
-      source = new EventSource(streamUrl);
-      source.onmessage = (event) => {
-        let payload = {};
-        try { payload = JSON.parse(event.data || '{}'); } catch {}
-        if (payload.type === 'ready') setStatus('connected');
-        if (payload.type === 'output' && typeof payload.chunk === 'string') write(payload.chunk);
-        if (payload.type === 'error') onError(payload.message || 'unknown');
-        if (payload.type === 'done') setStatus('session ended');
-      };
-      source.onerror = () => {
-        setStatus('stream disconnected');
-      };
+    }
+
+    async function bootstrapRead(write, onError) {
+      try {
+        const resp = await fetch(buildReadUrl(null, 40000), { cache: 'no-store' });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const payload = await resp.json();
+        if (typeof payload.from === 'number' && payload.from >= 0) {
+          readOffset = payload.from;
+        }
+        if (typeof payload.next === 'number') readOffset = payload.next;
+        if (typeof payload.chunk === 'string' && payload.chunk.length > 0) write(payload.chunk);
+        setStatus('connected');
+      } catch (err) {
+        onError(err && err.message ? err.message : 'bootstrap failed');
+        setStatus('reconnecting...');
+      }
+      pollTimer = setInterval(() => pollRead(write, onError), 700);
     }
 
     const xtermReady = typeof window.Terminal === 'function'
@@ -343,7 +371,7 @@ function buildTerminalEmbedPage(sessionName, accessToken) {
         out.textContent += String(chunk || '').replace(/\r/g, '\n');
         out.scrollTop = out.scrollHeight;
       };
-      connectStream(write, (msg) => write('\\n[error] ' + msg + '\\n'));
+      bootstrapRead(write, (msg) => write('\\n[error] ' + msg + '\\n'));
       input.addEventListener('keydown', (event) => {
         if (event.key !== 'Enter') return;
         event.preventDefault();
@@ -385,7 +413,7 @@ function buildTerminalEmbedPage(sessionName, accessToken) {
         resizeTimer = setTimeout(() => { sendResize(); }, 120);
       };
 
-      connectStream(
+      bootstrapRead(
         (chunk) => term.write(chunk),
         (msg) => { term.writeln(''); term.writeln('[error] ' + msg); }
       );
@@ -398,6 +426,9 @@ function buildTerminalEmbedPage(sessionName, accessToken) {
       });
 
       window.addEventListener('resize', scheduleResize);
+      window.addEventListener('beforeunload', () => {
+        if (pollTimer) clearInterval(pollTimer);
+      });
       sendResize();
     }
   </script>
@@ -504,7 +535,15 @@ app.get('/api/terminal/:sessionName/read', (req, res) => {
   }
   const output = ptyManager.getBufferedOutput(sessionName) || '';
   const rawFrom = Number(req.query?.from);
-  const from = Number.isFinite(rawFrom) && rawFrom > 0 ? Math.floor(rawFrom) : 0;
+  const hasFrom = Number.isFinite(rawFrom) && rawFrom >= 0;
+  const rawTail = Number(req.query?.tail);
+  const tail = Number.isFinite(rawTail)
+    ? Math.max(1024, Math.min(200000, Math.floor(rawTail)))
+    : 0;
+  let from = hasFrom ? Math.floor(rawFrom) : 0;
+  if (!hasFrom && tail > 0 && output.length > tail) {
+    from = output.length - tail;
+  }
   const safeFrom = Math.min(from, output.length);
   res.json({
     from: safeFrom,
