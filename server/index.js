@@ -241,7 +241,7 @@ function emitSSE(res, payload) {
 function buildTerminalEmbedPage(sessionName, accessToken) {
   const encodedSession = encodeURIComponent(sessionName);
   const tokenQuery = accessToken ? `?access_token=${encodeURIComponent(accessToken)}` : '';
-  const streamQuery = tokenQuery ? `${tokenQuery}&replay=0` : '?replay=0';
+  const streamQuery = tokenQuery ? `${tokenQuery}&replay=1&replay_bytes=40000` : '?replay=1&replay_bytes=40000';
   const streamUrl = `/api/terminal/${encodedSession}/stream${streamQuery}`;
   const inputUrl = `/api/terminal/${encodedSession}/input${tokenQuery}`;
   const resizeUrl = `/api/terminal/${encodedSession}/resize${tokenQuery}`;
@@ -301,9 +301,9 @@ function buildTerminalEmbedPage(sessionName, accessToken) {
       fontSize: 13,
       fontFamily: 'SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
       theme: {
-        background: '#0b111a',
-        foreground: '#e5edf8',
-        cursor: '#e5edf8'
+        background: '#f7f7f7',
+        foreground: '#111111',
+        cursor: '#111111'
       },
       scrollback: 5000
     });
@@ -402,6 +402,10 @@ app.get('/api/terminal/:sessionName/stream', (req, res) => {
   }
   const replayRaw = String(req.query?.replay ?? '').trim().toLowerCase();
   const replayEnabled = !(replayRaw === '0' || replayRaw === 'false' || replayRaw === 'no');
+  const replayBytesRaw = Number(req.query?.replay_bytes);
+  const replayBytes = Number.isFinite(replayBytesRaw)
+    ? Math.max(1024, Math.min(200000, Math.floor(replayBytesRaw)))
+    : 40000;
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -409,7 +413,10 @@ app.get('/api/terminal/:sessionName/stream', (req, res) => {
   if (typeof res.flushHeaders === 'function') res.flushHeaders();
 
   emitSSE(res, { type: 'ready', sessionName });
-  const replay = replayEnabled ? ptyManager.getBufferedOutput(sessionName) : '';
+  let replay = replayEnabled ? ptyManager.getBufferedOutput(sessionName) : '';
+  if (replay && replay.length > replayBytes) {
+    replay = replay.slice(-replayBytes);
+  }
   if (replay) {
     emitSSE(res, { type: 'output', chunk: replay, replay: true });
   }

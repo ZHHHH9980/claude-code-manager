@@ -217,23 +217,7 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func openNativeTerminal(_ task: CCMTask) async {
-        do {
-            let client = try makeClient()
-            let response = try await client.ensureTaskTerminalSession(taskID: task.id)
-            guard let sessionName = response.sessionName, !sessionName.isEmpty else {
-                throw CCMAPIClientError.terminalSessionMissing
-            }
-            let url = try client.terminalEmbedURL(sessionName: sessionName, includeAccessTokenInQuery: true)
-            activeNativeTerminalTask = nil
-            activeWebTerminal = CCMWebTerminalDestination(
-                id: "native-\(task.id)-\(sessionName)",
-                title: "\(task.title) · Native",
-                url: url
-            )
-            setStatus("Opened native terminal view for \(task.title).", kind: .success)
-        } catch {
-            setStatus(error.localizedDescription, kind: .error)
-        }
+        await openWebTerminal(task, label: "Native")
     }
 
     func closeNativeTerminal() {
@@ -266,15 +250,33 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func openWebTerminal(_ task: CCMTask) async {
+        await openWebTerminal(task, label: "Web")
+    }
+
+    private func openWebTerminal(_ task: CCMTask, label: String) async {
         do {
             let client = try makeClient()
             let response = try await client.ensureTaskTerminalSession(taskID: task.id)
             guard let sessionName = response.sessionName, !sessionName.isEmpty else {
                 throw CCMAPIClientError.terminalSessionMissing
             }
-            let url = try client.terminalEmbedURL(sessionName: sessionName, includeAccessTokenInQuery: true)
-            activeWebTerminal = CCMWebTerminalDestination(id: "\(task.id)-\(sessionName)", title: task.title, url: url)
-            setStatus("Opened web terminal for \(task.title).", kind: .success)
+            let baseURL = try client.terminalEmbedURL(sessionName: sessionName, includeAccessTokenInQuery: true)
+            var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
+            var queryItems = components?.queryItems ?? []
+            let nonce = String(Int(Date().timeIntervalSince1970 * 1000))
+            queryItems.append(URLQueryItem(name: "_ts", value: nonce))
+            components?.queryItems = queryItems
+            guard let url = components?.url else {
+                throw CCMAPIClientError.invalidBaseURL
+            }
+
+            activeWebTerminal = nil
+            activeWebTerminal = CCMWebTerminalDestination(
+                id: "\(label.lowercased())-\(task.id)-\(sessionName)-\(nonce)",
+                title: "\(task.title) · \(label)",
+                url: url
+            )
+            setStatus("Opened \(label.lowercased()) terminal for \(task.title).", kind: .success)
         } catch {
             setStatus(error.localizedDescription, kind: .error)
         }
