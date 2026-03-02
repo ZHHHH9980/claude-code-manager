@@ -1,0 +1,329 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		1B1EFC3DFFD425397D860DE4 /* CCMMobileMVPApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33D28E55D838E41DB42D3154 /* CCMMobileMVPApp.swift */; };
+		3FD7C6A1843900DD1A026921 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6824EC87052516B162D0CB0 /* ContentView.swift */; };
+		4C498942A9D40839A8A86550 /* DashboardViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D0FE1FDFEA3B180C1A49C3C /* DashboardViewModel.swift */; };
+		4E05A99A9E057A1EFDFB1CC8 /* CCMAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B03946FA40D39FAF664C86DA /* CCMAPIClient.swift */; };
+		59EF7ADEE28C18F263199794 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9931D16AB44DAFB3371FDE7C /* Models.swift */; };
+		7D09407A66A8BE9C32D8B857 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1094F04F519D061B66FF0003 /* Assets.xcassets */; };
+		FE8AA71C41BE579ACE13FF34 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57E8494EFEAA007A3F112421 /* KeychainStore.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		1094F04F519D061B66FF0003 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		33D28E55D838E41DB42D3154 /* CCMMobileMVPApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CCMMobileMVPApp.swift; sourceTree = "<group>"; };
+		4D0FE1FDFEA3B180C1A49C3C /* DashboardViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardViewModel.swift; sourceTree = "<group>"; };
+		57E8494EFEAA007A3F112421 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
+		6B2F841A891657A578D06B44 /* CCMMobileMVP.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = CCMMobileMVP.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		9931D16AB44DAFB3371FDE7C /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		B03946FA40D39FAF664C86DA /* CCMAPIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CCMAPIClient.swift; sourceTree = "<group>"; };
+		C1DBDA3B093814C1E9D5B740 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		E6824EC87052516B162D0CB0 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		A6D10504E94E0BB3AE026712 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				6B2F841A891657A578D06B44 /* CCMMobileMVP.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		D9898048FC3A5B66EBAC014F = {
+			isa = PBXGroup;
+			children = (
+				FF4190E5CD58233B9E2A06BD /* CCMMobileMVP */,
+				A6D10504E94E0BB3AE026712 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		FF4190E5CD58233B9E2A06BD /* CCMMobileMVP */ = {
+			isa = PBXGroup;
+			children = (
+				1094F04F519D061B66FF0003 /* Assets.xcassets */,
+				B03946FA40D39FAF664C86DA /* CCMAPIClient.swift */,
+				33D28E55D838E41DB42D3154 /* CCMMobileMVPApp.swift */,
+				E6824EC87052516B162D0CB0 /* ContentView.swift */,
+				4D0FE1FDFEA3B180C1A49C3C /* DashboardViewModel.swift */,
+				C1DBDA3B093814C1E9D5B740 /* Info.plist */,
+				57E8494EFEAA007A3F112421 /* KeychainStore.swift */,
+				9931D16AB44DAFB3371FDE7C /* Models.swift */,
+			);
+			path = CCMMobileMVP;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		01F5D631DEDAC897F873CCDC /* CCMMobileMVP */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1B60ADAA8586B9C491594ECE /* Build configuration list for PBXNativeTarget "CCMMobileMVP" */;
+			buildPhases = (
+				D9221D6F7067A311A4613DD2 /* Sources */,
+				50EAD3FD6E218BCDE95E1135 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = CCMMobileMVP;
+			packageProductDependencies = (
+			);
+			productName = CCMMobileMVP;
+			productReference = 6B2F841A891657A578D06B44 /* CCMMobileMVP.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		D373AEFF624A255D826AD5F4 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					01F5D631DEDAC897F873CCDC = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 0A260630EA6C6F65DDD7B5AE /* Build configuration list for PBXProject "CCMMobileMVP" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = D9898048FC3A5B66EBAC014F;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				01F5D631DEDAC897F873CCDC /* CCMMobileMVP */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		50EAD3FD6E218BCDE95E1135 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7D09407A66A8BE9C32D8B857 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		D9221D6F7067A311A4613DD2 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4E05A99A9E057A1EFDFB1CC8 /* CCMAPIClient.swift in Sources */,
+				1B1EFC3DFFD425397D860DE4 /* CCMMobileMVPApp.swift in Sources */,
+				3FD7C6A1843900DD1A026921 /* ContentView.swift in Sources */,
+				4C498942A9D40839A8A86550 /* DashboardViewModel.swift in Sources */,
+				FE8AA71C41BE579ACE13FF34 /* KeychainStore.swift in Sources */,
+				59EF7ADEE28C18F263199794 /* Models.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		4F26BDFA6EA7C8CF0CA736BB /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				INFOPLIST_FILE = CCMMobileMVP/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.local.CCMMobileMVP;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		6C52A733B745CDD0AD29F411 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		A54D1E645641143126B400E2 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				INFOPLIST_FILE = CCMMobileMVP/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.local.CCMMobileMVP;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		C0BB3EB8AF380A4C67410317 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		0A260630EA6C6F65DDD7B5AE /* Build configuration list for PBXProject "CCMMobileMVP" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				6C52A733B745CDD0AD29F411 /* Debug */,
+				C0BB3EB8AF380A4C67410317 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		1B60ADAA8586B9C491594ECE /* Build configuration list for PBXNativeTarget "CCMMobileMVP" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A54D1E645641143126B400E2 /* Debug */,
+				4F26BDFA6EA7C8CF0CA736BB /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = D373AEFF624A255D826AD5F4 /* Project object */;
+}
