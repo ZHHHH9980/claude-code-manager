@@ -4,6 +4,7 @@ const { EventEmitter } = require('node:events');
 
 let TaskChatRuntimeManager;
 let fakeChild = null;
+let lastSpawnArgs = null;
 
 function createFakeChild() {
   const child = new EventEmitter();
@@ -33,7 +34,8 @@ function loadFreshRuntimeModule() {
     loaded: true,
     exports: {
       ...realCP,
-      spawn: mock.fn(() => {
+      spawn: mock.fn((cmd, args) => {
+        lastSpawnArgs = { cmd, args };
         fakeChild = createFakeChild();
         return fakeChild;
       }),
@@ -53,6 +55,7 @@ function emitSplitUtf8(stream, text, splitOffset = 1) {
 describe('task-chat-runtime UTF-8 decoding', () => {
   beforeEach(() => {
     fakeChild = null;
+    lastSpawnArgs = null;
     loadFreshRuntimeModule();
   });
 
@@ -74,6 +77,10 @@ describe('task-chat-runtime UTF-8 decoding', () => {
       timeoutMs: 2000,
       onAssistantText: (text) => pieces.push(text),
     });
+
+    assert.equal(lastSpawnArgs?.cmd, 'claude');
+    assert.ok(Array.isArray(lastSpawnArgs?.args));
+    assert.ok(lastSpawnArgs.args.includes('--verbose'));
 
     await new Promise((resolve) => setImmediate(resolve));
 
