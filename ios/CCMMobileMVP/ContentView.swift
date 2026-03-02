@@ -61,7 +61,7 @@ struct ContentView: View {
                     Text(project.name).tag(project.id)
                 }
             }
-            .onChange(of: viewModel.selectedProjectID) { _, _ in
+            .onChange(of: viewModel.selectedProjectID) { _ in
                 Task {
                     await viewModel.reloadTasksForSelection()
                 }
