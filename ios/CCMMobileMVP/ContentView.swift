@@ -299,15 +299,11 @@ struct ContentView: View {
             if filteredTasks.isEmpty {
                 emptyCard(message: "No tasks in this filter.")
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 10) {
-                        ForEach(filteredTasks) { task in
-                            taskCard(task)
-                        }
+                LazyVStack(spacing: 10) {
+                    ForEach(filteredTasks) { task in
+                        taskCard(task)
                     }
-                    .padding(.vertical, 1)
                 }
-                .frame(maxHeight: 420)
             }
         }
     }

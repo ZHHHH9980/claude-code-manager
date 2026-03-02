@@ -169,6 +169,15 @@ struct CCMAPIClient {
         )
     }
 
+    func readTerminalOutput(sessionName: String, from: Int) async throws -> CCMTerminalReadResponse {
+        let safeSession = sessionName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sessionName
+        let data = try await request(
+            path: "/api/terminal/\(safeSession)/read",
+            queryItems: [URLQueryItem(name: "from", value: String(max(0, from)))]
+        )
+        return try decoder.decode(CCMTerminalReadResponse.self, from: data)
+    }
+
     func fetchTaskChatHistory(taskID: String) async throws -> [CCMChatMessage] {
         let data = try await request(path: "/api/tasks/\(taskID)/chat/history")
         let payload = try decoder.decode(CCMTaskChatHistoryResponse.self, from: data)

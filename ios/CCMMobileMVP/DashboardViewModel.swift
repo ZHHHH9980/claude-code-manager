@@ -39,8 +39,8 @@ final class DashboardViewModel: ObservableObject {
     private let accessTokenKey = "ccm_access_token"
     private let selectedProjectIDKey = "ccm_selected_project_id"
     private var didBootstrap = false
-    private var terminalStreamTask: Task<Void, Never>?
-    private var terminalConnectWatchdogTask: Task<Void, Never>?
+    private var terminalPollTask: Task<Void, Never>?
+    private var terminalReadOffset = 0
 
     private static let fallbackAdapters: [CCMAdapter] = [
         CCMAdapter(
@@ -69,8 +69,7 @@ final class DashboardViewModel: ObservableObject {
     }
 
     deinit {
-        terminalStreamTask?.cancel()
-        terminalConnectWatchdogTask?.cancel()
+        terminalPollTask?.cancel()
     }
 
     var selectedProject: CCMProject? {
@@ -229,7 +228,8 @@ final class DashboardViewModel: ObservableObject {
             activeTerminalSessionName = sessionName
             terminalOutput = ""
             terminalInput = ""
-            beginTerminalStream(sessionName: sessionName)
+            terminalReadOffset = 0
+            beginTerminalPolling(sessionName: sessionName)
             setStatus("Connected native terminal for \(task.title).", kind: .success)
         } catch {
             setStatus(error.localizedDescription, kind: .error)
@@ -237,13 +237,12 @@ final class DashboardViewModel: ObservableObject {
     }
 
     func closeNativeTerminal() {
-        terminalStreamTask?.cancel()
-        terminalStreamTask = nil
-        terminalConnectWatchdogTask?.cancel()
-        terminalConnectWatchdogTask = nil
+        terminalPollTask?.cancel()
+        terminalPollTask = nil
         activeNativeTerminalTask = nil
         activeTerminalSessionName = ""
         terminalInput = ""
+        terminalReadOffset = 0
         isTerminalConnecting = false
         isTerminalSending = false
     }
@@ -355,78 +354,46 @@ final class DashboardViewModel: ObservableObject {
         return CCMChatMessage(role: "assistant", text: text, createdAt: nil)
     }
 
-    private func beginTerminalStream(sessionName: String) {
-        terminalStreamTask?.cancel()
-        terminalConnectWatchdogTask?.cancel()
+    private func beginTerminalPolling(sessionName: String) {
+        terminalPollTask?.cancel()
         isTerminalConnecting = true
         appendTerminalOutput("Connecting to session \(sessionName)...\n")
 
-        terminalConnectWatchdogTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 8_000_000_000)
-            await MainActor.run {
-                guard let self else { return }
-                guard self.activeTerminalSessionName == sessionName, self.isTerminalConnecting else { return }
-                self.isTerminalConnecting = false
-                self.appendTerminalOutput("[waiting] stream handshake is slow. You can still try sending a command.\n")
-            }
-        }
-
-        terminalStreamTask = Task { [weak self] in
-            await self?.consumeTerminalStream(sessionName: sessionName)
-        }
-    }
-
-    private func consumeTerminalStream(sessionName: String) async {
-        do {
-            let client = try makeClient()
-            let bytes = try await client.streamTerminal(sessionName: sessionName, replay: false)
-            terminalConnectWatchdogTask?.cancel()
-            terminalConnectWatchdogTask = nil
-            isTerminalConnecting = false
-
-            var payloadLines: [String] = []
-            for try await line in bytes.lines {
-                if Task.isCancelled { break }
-                if line.hasPrefix("data: ") {
-                    payloadLines.append(String(line.dropFirst(6)))
-                    continue
+        terminalPollTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let client = try self.makeClient()
+                var connected = false
+                while !Task.isCancelled, self.activeTerminalSessionName == sessionName {
+                    do {
+                        let payload = try await client.readTerminalOutput(
+                            sessionName: sessionName,
+                            from: self.terminalReadOffset
+                        )
+                        self.terminalReadOffset = max(self.terminalReadOffset, payload.next)
+                        if !connected {
+                            connected = true
+                            self.isTerminalConnecting = false
+                            self.appendTerminalOutput("[connected]\n")
+                        }
+                        let chunk = self.sanitizeTerminalText(payload.chunk)
+                        if !chunk.isEmpty {
+                            self.appendTerminalOutput(chunk)
+                        }
+                    } catch {
+                        if !connected {
+                            self.isTerminalConnecting = false
+                            self.appendTerminalOutput("[connect error] \(error.localizedDescription)\n")
+                        }
+                        self.setStatus(error.localizedDescription, kind: .error)
+                    }
+                    try? await Task.sleep(nanoseconds: 800_000_000)
                 }
-                if !line.isEmpty { continue }
-                if payloadLines.isEmpty { continue }
-                let payload = payloadLines.joined(separator: "\n")
-                payloadLines.removeAll(keepingCapacity: true)
-                handleTerminalEventPayload(payload)
+            } catch {
+                self.isTerminalConnecting = false
+                self.appendTerminalOutput("[client error] \(error.localizedDescription)\n")
+                self.setStatus(error.localizedDescription, kind: .error)
             }
-        } catch is CancellationError {
-            // Sheet closed; do not report as error.
-        } catch {
-            terminalConnectWatchdogTask?.cancel()
-            terminalConnectWatchdogTask = nil
-            isTerminalConnecting = false
-            appendTerminalOutput("\n[stream error] \(error.localizedDescription)\n")
-            setStatus(error.localizedDescription, kind: .error)
-        }
-    }
-
-    private func handleTerminalEventPayload(_ payload: String) {
-        guard let data = payload.data(using: .utf8),
-              let event = try? JSONDecoder().decode(CCMTerminalStreamEvent.self, from: data) else {
-            return
-        }
-
-        switch event.type {
-        case "output":
-            if let chunk = event.chunk {
-                appendTerminalOutput(sanitizeTerminalText(chunk))
-            }
-        case "ready":
-            appendTerminalOutput("[connected]\n")
-        case "done":
-            appendTerminalOutput("\n[session ended]\n")
-        case "error":
-            appendTerminalOutput("\n[error] \(event.message ?? "unknown")\n")
-        default:
-            break
         }
     }
 

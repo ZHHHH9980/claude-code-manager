@@ -63,6 +63,12 @@ struct CCMTerminalStreamEvent: Codable, Hashable {
     let message: String?
 }
 
+struct CCMTerminalReadResponse: Codable, Hashable {
+    let from: Int
+    let next: Int
+    let chunk: String
+}
+
 struct CCMWebTerminalDestination: Identifiable, Hashable {
     let id: String
     let title: String

@@ -241,7 +241,8 @@ function emitSSE(res, payload) {
 function buildTerminalEmbedPage(sessionName, accessToken) {
   const encodedSession = encodeURIComponent(sessionName);
   const tokenQuery = accessToken ? `?access_token=${encodeURIComponent(accessToken)}` : '';
-  const streamUrl = `/api/terminal/${encodedSession}/stream${tokenQuery}`;
+  const streamQuery = tokenQuery ? `${tokenQuery}&replay=0` : '?replay=0';
+  const streamUrl = `/api/terminal/${encodedSession}/stream${streamQuery}`;
   const inputUrl = `/api/terminal/${encodedSession}/input${tokenQuery}`;
   return `<!doctype html>
 <html lang="en">
@@ -318,6 +319,7 @@ function buildTerminalEmbedPage(sessionName, accessToken) {
     function stripAnsi(text) {
       if (typeof text !== 'string' || text.length === 0) return '';
       return text
+        .replace(/\r/g, '\n')
         .replace(/\\x1B\\[[0-9;?]*[ -/]*[@-~]/g, '')
         .replace(/\\x1B\\][^\\x07]*(\\x07|\\x1B\\\\)/g, '')
         .replace(/[\\x00-\\x08\\x0B-\\x1F\\x7F]/g, '');
@@ -344,6 +346,7 @@ function buildTerminalEmbedPage(sessionName, accessToken) {
       const value = cmd.value;
       if (!value.trim()) return;
       cmd.value = '';
+      append('\\n> ' + value + '\\n');
       try {
         await fetch(${JSON.stringify(inputUrl)}, {
           method: 'POST',
@@ -449,6 +452,23 @@ app.post('/api/terminal/:sessionName/resize', (req, res) => {
   const rows = Math.max(10, Math.min(200, Number(req.body?.rows) || 30));
   ptyManager.resizeSession(sessionName, cols, rows);
   res.json({ ok: true, cols, rows });
+});
+
+app.get('/api/terminal/:sessionName/read', (req, res) => {
+  const sessionName = normalizeSessionName(req.params.sessionName);
+  if (!sessionName) return res.status(400).json({ error: 'invalid session name' });
+  if (!ptyManager.sessionExists(sessionName)) {
+    return res.status(404).json({ error: 'session not found' });
+  }
+  const output = ptyManager.getBufferedOutput(sessionName) || '';
+  const rawFrom = Number(req.query?.from);
+  const from = Number.isFinite(rawFrom) && rawFrom > 0 ? Math.floor(rawFrom) : 0;
+  const safeFrom = Math.min(from, output.length);
+  res.json({
+    from: safeFrom,
+    next: output.length,
+    chunk: output.slice(safeFrom),
+  });
 });
 
 app.get('/api/terminal/:sessionName/embed', (req, res) => {
