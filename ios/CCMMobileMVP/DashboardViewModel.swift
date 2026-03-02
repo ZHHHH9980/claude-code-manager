@@ -38,7 +38,9 @@ final class DashboardViewModel: ObservableObject {
     private let serverURLKey = "ccm_server_url"
     private let accessTokenKey = "ccm_access_token"
     private let selectedProjectIDKey = "ccm_selected_project_id"
+    private let e2eResultKey = "ccm_e2e_smoke_result_json"
     private var didBootstrap = false
+    private var didRunE2ESmoke = false
     private var terminalPollTask: Task<Void, Never>?
     private var terminalReadOffset = 0
     private var lastTerminalPollErrorMessage = ""
@@ -85,6 +87,7 @@ final class DashboardViewModel: ObservableObject {
         guard !didBootstrap else { return }
         didBootstrap = true
         await refresh()
+        await runE2ESmokeIfNeeded()
     }
 
     func saveConfiguration() async {
@@ -522,5 +525,86 @@ final class DashboardViewModel: ObservableObject {
     private func setStatus(_ text: String, kind: CCMStatusKind) {
         statusText = text
         statusKind = kind
+    }
+
+    private func runE2ESmokeIfNeeded() async {
+        guard !didRunE2ESmoke else { return }
+        didRunE2ESmoke = true
+
+        let processInfo = ProcessInfo.processInfo
+        let args = processInfo.arguments
+        guard args.contains("--ccm-e2e-smoke") else { return }
+
+        func argumentValue(_ name: String) -> String? {
+            guard let index = args.firstIndex(of: name), index + 1 < args.count else { return nil }
+            return args[index + 1]
+        }
+
+        if let overrideURL = argumentValue("--ccm-server-url")?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !overrideURL.isEmpty {
+            serverURL = overrideURL
+        }
+        if let overrideToken = argumentValue("--ccm-access-token")?.trimmingCharacters(in: .whitespacesAndNewlines) {
+            accessToken = overrideToken
+        }
+
+        var result: [String: Any] = [
+            "ok": false,
+            "timestamp": ISO8601DateFormatter().string(from: Date()),
+            "steps": [String](),
+            "serverURL": serverURL
+        ]
+        var steps = [String]()
+
+        do {
+            let client = try makeClient()
+            steps.append("client_ready")
+
+            let loadedProjects = try await client.fetchProjects()
+            projects = loadedProjects
+            steps.append("projects_loaded:\(loadedProjects.count)")
+
+            let loadedTasks = try await client.fetchTasks(projectId: nil)
+            tasks = loadedTasks
+            steps.append("tasks_loaded:\(loadedTasks.count)")
+
+            let runningTask = loadedTasks.first(where: { $0.status == "in_progress" })
+            let fallbackTask = loadedTasks.first(where: { $0.ptySession?.isEmpty == false })
+            guard let task = runningTask ?? fallbackTask else {
+                throw CCMAPIClientError.chatRuntimeError("no running task for E2E")
+            }
+            steps.append("running_task:\(task.id)")
+
+            let ensured = try await client.ensureTaskTerminalSession(taskID: task.id)
+            guard let sessionName = ensured.sessionName, !sessionName.isEmpty else {
+                throw CCMAPIClientError.terminalSessionMissing
+            }
+            steps.append("terminal_session:\(sessionName)")
+
+            let state = try await client.fetchTerminalState(sessionName: sessionName)
+            guard state.exists else {
+                throw CCMAPIClientError.chatRuntimeError("terminal session missing in state API")
+            }
+            steps.append("terminal_state_ok")
+
+            _ = try await client.readTerminalOutput(sessionName: sessionName, tail: 2048)
+            steps.append("terminal_read_ok")
+
+            result["ok"] = true
+            result["taskId"] = task.id
+            result["sessionName"] = sessionName
+            result["steps"] = steps
+            setStatus("iOS E2E smoke passed.", kind: .success)
+        } catch {
+            result["ok"] = false
+            result["steps"] = steps
+            result["error"] = error.localizedDescription
+            setStatus("iOS E2E smoke failed: \(error.localizedDescription)", kind: .error)
+        }
+
+        if let data = try? JSONSerialization.data(withJSONObject: result, options: []),
+           let json = String(data: data, encoding: .utf8) {
+            defaults.set(json, forKey: e2eResultKey)
+        }
     }
 }
