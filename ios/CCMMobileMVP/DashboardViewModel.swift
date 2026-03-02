@@ -223,14 +223,14 @@ final class DashboardViewModel: ObservableObject {
             guard let sessionName = response.sessionName, !sessionName.isEmpty else {
                 throw CCMAPIClientError.terminalSessionMissing
             }
-
-            activeNativeTerminalTask = task
-            activeTerminalSessionName = sessionName
-            terminalOutput = ""
-            terminalInput = ""
-            terminalReadOffset = 0
-            beginTerminalPolling(sessionName: sessionName)
-            setStatus("Connected native terminal for \(task.title).", kind: .success)
+            let url = try client.terminalEmbedURL(sessionName: sessionName, includeAccessTokenInQuery: true)
+            activeNativeTerminalTask = nil
+            activeWebTerminal = CCMWebTerminalDestination(
+                id: "native-\(task.id)-\(sessionName)",
+                title: "\(task.title) · Native",
+                url: url
+            )
+            setStatus("Opened native terminal view for \(task.title).", kind: .success)
         } catch {
             setStatus(error.localizedDescription, kind: .error)
         }

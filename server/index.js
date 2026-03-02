@@ -244,12 +244,14 @@ function buildTerminalEmbedPage(sessionName, accessToken) {
   const streamQuery = tokenQuery ? `${tokenQuery}&replay=0` : '?replay=0';
   const streamUrl = `/api/terminal/${encodedSession}/stream${streamQuery}`;
   const inputUrl = `/api/terminal/${encodedSession}/input${tokenQuery}`;
+  const resizeUrl = `/api/terminal/${encodedSession}/resize${tokenQuery}`;
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <title>CCM Terminal Web</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css" />
   <style>
     :root { color-scheme: dark; }
     body {
@@ -261,110 +263,114 @@ function buildTerminalEmbedPage(sessionName, accessToken) {
       flex-direction: column;
       height: 100vh;
     }
-    .header {
+    .topbar {
       padding: 10px 12px;
       border-bottom: 1px solid #1f2a37;
       color: #9fb0c6;
       font-size: 12px;
-    }
-    #output {
-      flex: 1;
-      overflow-y: auto;
-      white-space: pre-wrap;
-      padding: 12px;
-      line-height: 1.25;
-      font-size: 12px;
-      word-break: break-word;
-    }
-    .bar {
-      border-top: 1px solid #1f2a37;
-      padding: 8px;
       display: flex;
-      gap: 8px;
-      background: #0f1724;
+      align-items: center;
+      justify-content: space-between;
     }
-    #cmd {
+    #terminal {
       flex: 1;
-      border: 1px solid #243346;
-      background: #111a29;
-      color: #eef3ff;
-      border-radius: 8px;
-      padding: 10px;
-      font: inherit;
+      padding: 8px;
+      min-height: 120px;
     }
-    button {
-      border: none;
-      border-radius: 8px;
-      background: #167f6d;
-      color: white;
-      padding: 0 14px;
-      font-size: 13px;
-      font-weight: 600;
+    .status {
+      color: #9aa9bf;
+      font-size: 11px;
+      white-space: nowrap;
     }
   </style>
 </head>
 <body>
-  <div class="header">Web Terminal • ${sessionName}</div>
-  <pre id="output"></pre>
-  <div class="bar">
-    <input id="cmd" placeholder="Type command and press Enter" autocomplete="off" autocapitalize="off" />
-    <button id="send">Send</button>
+  <div class="topbar">
+    <span>Web Terminal • ${sessionName}</span>
+    <span id="status" class="status">connecting...</span>
   </div>
+  <div id="terminal"></div>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
   <script>
-    const output = document.getElementById('output');
-    const cmd = document.getElementById('cmd');
-    const sendBtn = document.getElementById('send');
-    const source = new EventSource(${JSON.stringify(streamUrl)});
-
-    function stripAnsi(text) {
-      if (typeof text !== 'string' || text.length === 0) return '';
-      return text
-        .replace(/\r/g, '\n')
-        .replace(/\\x1B\\[[0-9;?]*[ -/]*[@-~]/g, '')
-        .replace(/\\x1B\\][^\\x07]*(\\x07|\\x1B\\\\)/g, '')
-        .replace(/[\\x00-\\x08\\x0B-\\x1F\\x7F]/g, '');
-    }
-
-    function append(text) {
-      const clean = stripAnsi(text);
-      if (!clean) return;
-      output.textContent += clean;
-      output.scrollTop = output.scrollHeight;
-    }
-
-    source.onmessage = (event) => {
-      try {
-        const payload = JSON.parse(event.data || '{}');
-        if (payload.type === 'output' && typeof payload.chunk === 'string') append(payload.chunk);
-        if (payload.type === 'error' && payload.message) append('\\n[error] ' + payload.message + '\\n');
-        if (payload.type === 'done') append('\\n[session ended]\\n');
-      } catch {}
-    };
-    source.onerror = () => append('\\n[stream disconnected]\\n');
-
-    async function sendInput() {
-      const value = cmd.value;
-      if (!value.trim()) return;
-      cmd.value = '';
-      append('\\n> ' + value + '\\n');
-      try {
-        await fetch(${JSON.stringify(inputUrl)}, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ data: value + '\\n' }),
-        });
-      } catch (err) {
-        append('\\n[input failed]\\n');
-      }
-    }
-
-    sendBtn.addEventListener('click', sendInput);
-    cmd.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') {
-        event.preventDefault();
-        sendInput();
-      }
+    const statusEl = document.getElementById('status');
+    const terminalRoot = document.getElementById('terminal');
+    const term = new Terminal({
+      convertEol: true,
+      cursorBlink: true,
+      fontSize: 13,
+      fontFamily: 'SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
+      theme: {
+        background: '#0b111a',
+        foreground: '#e5edf8',
+        cursor: '#e5edf8'
+      },
+      scrollback: 5000
     });
+    const fitAddon = new FitAddon.FitAddon();
+    term.loadAddon(fitAddon);
+    term.open(terminalRoot);
+    fitAddon.fit();
+    term.focus();
+
+    let source = null;
+    let resizeTimer = null;
+
+    function setStatus(text) {
+      statusEl.textContent = text;
+    }
+
+    async function postJSON(url, payload) {
+      return fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    }
+
+    async function sendResize() {
+      fitAddon.fit();
+      try {
+        await postJSON(${JSON.stringify(resizeUrl)}, { cols: term.cols || 120, rows: term.rows || 30 });
+      } catch {}
+    }
+
+    function scheduleResize() {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => { sendResize(); }, 120);
+    }
+
+    function connectStream() {
+      if (source) {
+        try { source.close(); } catch {}
+      }
+      source = new EventSource(${JSON.stringify(streamUrl)});
+      source.onmessage = (event) => {
+        let payload = {};
+        try { payload = JSON.parse(event.data || '{}'); } catch {}
+        if (payload.type === 'ready') setStatus('connected');
+        if (payload.type === 'output' && typeof payload.chunk === 'string') term.write(payload.chunk);
+        if (payload.type === 'error') {
+          term.writeln('');
+          term.writeln('[error] ' + (payload.message || 'unknown'));
+        }
+        if (payload.type === 'done') setStatus('session ended');
+      };
+      source.onerror = () => {
+        setStatus('stream disconnected');
+      };
+    }
+
+    term.onData((data) => {
+      postJSON(${JSON.stringify(inputUrl)}, { data }).catch(() => {
+        term.writeln('');
+        term.writeln('[input failed]');
+      });
+    });
+
+    window.addEventListener('resize', scheduleResize);
+    connectStream();
+    sendResize();
   </script>
 </body>
 </html>`;

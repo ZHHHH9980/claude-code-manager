@@ -62,6 +62,7 @@ struct ContentView: View {
                 .padding(.vertical, 12)
                 .padding(.bottom, 26)
             }
+            .scrollDisabled(selectedPane == .tasks)
         }
         .task {
             await viewModel.bootstrapIfNeeded()
@@ -97,11 +98,6 @@ struct ContentView: View {
         }
         .sheet(item: $viewModel.activeChatTask) { task in
             taskChatSheet(task: task)
-        }
-        .sheet(item: $viewModel.activeNativeTerminalTask, onDismiss: {
-            viewModel.closeNativeTerminal()
-        }) { task in
-            nativeTerminalSheet(task: task)
         }
         .sheet(item: $viewModel.activeWebTerminal, onDismiss: {
             viewModel.closeWebTerminal()
@@ -299,11 +295,14 @@ struct ContentView: View {
             if filteredTasks.isEmpty {
                 emptyCard(message: "No tasks in this filter.")
             } else {
-                LazyVStack(spacing: 10) {
-                    ForEach(filteredTasks) { task in
-                        taskCard(task)
+                ScrollView {
+                    LazyVStack(spacing: 10) {
+                        ForEach(filteredTasks) { task in
+                            taskCard(task)
+                        }
                     }
                 }
+                .frame(maxHeight: 460)
             }
         }
     }
