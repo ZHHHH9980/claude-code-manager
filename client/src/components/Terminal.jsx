@@ -8,10 +8,36 @@ function safeFit(fitAddon) {
   try { fitAddon.fit(); } catch {}
 }
 
-export function Terminal({ socket, sessionName, replayOnAttach = true, forceRedrawOnAttach = true }) {
+function normalizeTerminalError(raw) {
+  if (raw && typeof raw === 'object') {
+    return {
+      sessionName: typeof raw.sessionName === 'string' ? raw.sessionName : null,
+      code: typeof raw.code === 'string' ? raw.code : '',
+      message: typeof raw.message === 'string' ? raw.message : 'terminal error',
+      recoverable: Boolean(raw.recoverable),
+    };
+  }
+  return {
+    sessionName: null,
+    code: '',
+    message: typeof raw === 'string' && raw.trim() ? raw : 'terminal error',
+    recoverable: false,
+  };
+}
+
+export function Terminal({
+  socket,
+  sessionName,
+  replayOnAttach = true,
+  forceRedrawOnAttach = true,
+  onStatusChange,
+  onFatalError,
+}) {
   const containerRef = useRef(null);
   const lastSizeRef = useRef({ cols: 0, rows: 0 });
   const resizeTimerRef = useRef(null);
+  const lastAttachAtRef = useRef(0);
+  const lastStructuredErrorAtRef = useRef(0);
 
   useEffect(() => {
     if (!socket || !sessionName || !containerRef.current) return;
@@ -35,6 +61,7 @@ export function Terminal({ socket, sessionName, replayOnAttach = true, forceRedr
       term.unicode.activeVersion = '11';
     } catch {}
     term.open(container);
+    onStatusChange?.('initializing terminal...');
 
     const syncSize = (force = false) => {
       const cols = term.cols;
@@ -61,22 +88,57 @@ export function Terminal({ socket, sessionName, replayOnAttach = true, forceRedr
       }, 90);
     };
 
-    // Set up listeners BEFORE attaching so we don't miss initial data
+    const attachSession = (reason = 'attach') => {
+      const now = Date.now();
+      if (now - lastAttachAtRef.current < 250) return;
+      lastAttachAtRef.current = now;
+      safeFit(fitAddon);
+      socket.emit('terminal:attach', {
+        sessionName,
+        cols: term.cols,
+        rows: term.rows,
+        replayBuffer: Boolean(replayOnAttach),
+        forceRedraw: Boolean(forceRedrawOnAttach),
+      });
+      scheduleSyncSize(true);
+      if (reason === 'reconnect') onStatusChange?.('reconnecting terminal...');
+      else onStatusChange?.('connecting terminal...');
+    };
+
+    // Set up listeners BEFORE attaching so we don't miss initial data.
     const onTerminalData = (data) => term.write(data);
-    const onTerminalError = (msg) => term.writeln(`\r\n[terminal error] ${msg}`);
+    const handleTerminalError = (rawError, source = 'legacy') => {
+      if (source === 'legacy' && Date.now() - lastStructuredErrorAtRef.current < 300) return;
+      const err = normalizeTerminalError(rawError);
+      if (err.sessionName && err.sessionName !== sessionName) return;
+      term.writeln(`\r\n[terminal error] ${err.message}`);
+      const statusText = err.code ? `terminal ${err.code}` : `terminal error: ${err.message}`;
+      onStatusChange?.(statusText);
+      if (!err.recoverable || err.code === 'session_not_found' || err.code === 'invalid_session_name') {
+        onFatalError?.(err);
+      }
+    };
+    const onTerminalError = (msg) => handleTerminalError(msg, 'legacy');
+    const onTerminalErrorV2 = (payload) => {
+      lastStructuredErrorAtRef.current = Date.now();
+      handleTerminalError(payload, 'v2');
+    };
+    const onTerminalReady = (payload) => {
+      if (!payload || payload.sessionName !== sessionName) return;
+      onStatusChange?.('terminal connected');
+    };
+    const onSocketConnect = () => attachSession('reconnect');
+    const onSocketDisconnect = () => onStatusChange?.('socket disconnected, waiting reconnect...');
+
     socket.on(`terminal:data:${sessionName}`, onTerminalData);
     socket.on('terminal:error', onTerminalError);
+    socket.on('terminal:error:v2', onTerminalErrorV2);
+    socket.on('terminal:ready', onTerminalReady);
+    socket.on('connect', onSocketConnect);
+    socket.on('disconnect', onSocketDisconnect);
 
-    // Fit to container first so we send correct dimensions with attach.
-    safeFit(fitAddon);
-    socket.emit('terminal:attach', {
-      sessionName,
-      cols: term.cols,
-      rows: term.rows,
-      replayBuffer: Boolean(replayOnAttach),
-      forceRedraw: Boolean(forceRedrawOnAttach),
-    });
-    scheduleSyncSize(true);
+    // Initial attach
+    attachSession('attach');
 
     // Focus after a short delay (container may not be fully visible yet)
     const initTimer = setTimeout(() => {
@@ -107,9 +169,13 @@ export function Terminal({ socket, sessionName, replayOnAttach = true, forceRedr
       observer.disconnect();
       socket.off(`terminal:data:${sessionName}`, onTerminalData);
       socket.off('terminal:error', onTerminalError);
+      socket.off('terminal:error:v2', onTerminalErrorV2);
+      socket.off('terminal:ready', onTerminalReady);
+      socket.off('connect', onSocketConnect);
+      socket.off('disconnect', onSocketDisconnect);
       container.removeEventListener('mousedown', focusHandler);
     };
-  }, [socket, sessionName, replayOnAttach, forceRedrawOnAttach]);
+  }, [socket, sessionName, replayOnAttach, forceRedrawOnAttach, onStatusChange, onFatalError]);
 
   return <div ref={containerRef} className="w-full h-full terminal-host" style={{ overflow: 'hidden' }} />;
 }

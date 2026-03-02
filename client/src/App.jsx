@@ -67,6 +67,7 @@ export default function App() {
   const [activeTaskTitle, setActiveTaskTitle] = useState('');
   const [activeTaskMode, setActiveTaskMode] = useState('');
   const [isTaskTerminalOpen, setIsTaskTerminalOpen] = useState(false);
+  const [taskTerminalStatus, setTaskTerminalStatus] = useState('');
 
   const { socket } = useSocket();
   const [agentTerminalSession, setAgentTerminalSession] = useState(null);
@@ -157,15 +158,16 @@ export default function App() {
 
   useEffect(() => {
     if (!selectedProject || activeTaskId || !tasksLoaded) return;
-    const savedTaskId = localStorage.getItem(STORAGE_ACTIVE_TASK_ID);
-    if (!savedTaskId) return;
-    const savedTask = tasks.find((task) => String(task.id) === String(savedTaskId));
-    if (!savedTask || !savedTask.pty_session) return;
-    setActiveSession(savedTask.pty_session);
-    setActiveTaskId(savedTask.id);
-    setActiveTaskTitle(savedTask.title || savedTask.pty_session);
-    setActiveTaskMode(savedTask.mode || '');
-    setIsTaskTerminalOpen(true);
+    let cancelled = false;
+    const restore = async () => {
+      const savedTaskId = localStorage.getItem(STORAGE_ACTIVE_TASK_ID);
+      if (!savedTaskId) return;
+      const savedTask = tasks.find((task) => String(task.id) === String(savedTaskId));
+      if (!savedTask || !savedTask.pty_session || cancelled) return;
+      await openTaskTerminalWithStateCheck(savedTask);
+    };
+    restore();
+    return () => { cancelled = true; };
   }, [selectedProject, tasks, activeTaskId, tasksLoaded]);
 
   function clearActiveTaskChat() {
@@ -174,11 +176,48 @@ export default function App() {
     setActiveTaskId(null);
     setActiveTaskTitle('');
     setActiveTaskMode('');
+    setTaskTerminalStatus('');
     setIsTaskTerminalOpen(false);
   }
 
   function closeTaskTerminalModal() {
     setIsTaskTerminalOpen(false);
+  }
+
+  async function fetchTerminalState(sessionName) {
+    const res = await fetch(`${API_BASE_URL}/api/terminal/${encodeURIComponent(sessionName)}/state`);
+    let payload = {};
+    try { payload = await res.json(); } catch {}
+    if (!res.ok) {
+      throw new Error(payload?.error || `failed to load terminal state (${res.status})`);
+    }
+    return payload;
+  }
+
+  async function openTaskTerminalWithStateCheck(task) {
+    if (!task?.pty_session) return false;
+    try {
+      const state = await fetchTerminalState(task.pty_session);
+      if (!state?.exists) {
+        setTaskTerminalStatus('session missing (restart task)');
+        window.alert(`Terminal session is missing for "${task.title}". Please restart this task.`);
+        refreshAll();
+        return false;
+      }
+      localStorage.setItem(STORAGE_ACTIVE_TASK_ID, String(task.id));
+      setActiveSession(task.pty_session);
+      setActiveTaskId(task.id);
+      setActiveTaskTitle(task.title || task.pty_session);
+      setActiveTaskMode(task.mode || '');
+      setTaskTerminalStatus('opening terminal...');
+      setIsTaskTerminalOpen(true);
+      return true;
+    } catch (err) {
+      const msg = err?.message || 'terminal state check failed';
+      setTaskTerminalStatus(msg);
+      window.alert(msg);
+      return false;
+    }
   }
 
   function refreshAll() {
@@ -214,18 +253,13 @@ export default function App() {
     setActiveTaskId(task.id);
     setActiveTaskTitle(task.title || sessionName);
     setActiveTaskMode(requestedMode || '');
+    setTaskTerminalStatus('opening terminal...');
     setIsTaskTerminalOpen(true);
     refreshAll();
   }
 
-  function handleOpenTask(task) {
-    if (!task?.pty_session) return;
-    localStorage.setItem(STORAGE_ACTIVE_TASK_ID, String(task.id));
-    setActiveSession(task.pty_session);
-    setActiveTaskId(task.id);
-    setActiveTaskTitle(task.title || task.pty_session);
-    setActiveTaskMode(task.mode || '');
-    setIsTaskTerminalOpen(true);
+  async function handleOpenTask(task) {
+    await openTaskTerminalWithStateCheck(task);
   }
 
   async function handleDeleteTask(task) {
@@ -449,6 +483,15 @@ export default function App() {
               <span style={{ color: 'var(--text-3)' }} className="hidden sm:inline">|</span>
               <span className="truncate">{activeTaskTitle}</span>
               <span style={{ color: 'var(--text-3)' }} className="hidden md:inline">({activeSession})</span>
+              {taskTerminalStatus ? (
+                <span
+                  style={{ color: 'var(--text-3)' }}
+                  className="hidden md:inline truncate max-w-[280px]"
+                  title={taskTerminalStatus}
+                >
+                  {taskTerminalStatus}
+                </span>
+              ) : null}
               <button
                 onClick={closeTaskTerminalModal}
                 className="ml-auto ccm-button ccm-button-soft text-xs px-3 py-1.5"
@@ -458,7 +501,16 @@ export default function App() {
             </div>
 
             <div className="flex-1 min-h-0">
-              <Terminal socket={socket} sessionName={activeSession} forceRedrawOnAttach={activeTaskMode !== 'codex'} />
+              <Terminal
+                socket={socket}
+                sessionName={activeSession}
+                forceRedrawOnAttach={activeTaskMode !== 'codex'}
+                onStatusChange={setTaskTerminalStatus}
+                onFatalError={(err) => {
+                  const message = err?.message || 'terminal unavailable';
+                  setTaskTerminalStatus(`fatal: ${message}`);
+                }}
+              />
             </div>
           </div>
         </div>
