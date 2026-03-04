@@ -31,8 +31,8 @@ function listAdapters() {
   return Array.from(adapters.values());
 }
 
-register(claude);
 register(codex);
+register(claude);
 
 module.exports = {
   register,
