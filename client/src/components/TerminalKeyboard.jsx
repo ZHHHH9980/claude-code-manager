@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 
 const KEY_MAPPINGS = {
@@ -46,6 +46,31 @@ const CTRL_KEYS = [
 export function TerminalKeyboard({ onKeyPress, visible = true }) {
   const [showCtrlKeys, setShowCtrlKeys] = useState(false);
   const [ctrlPressed, setCtrlPressed] = useState(false);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+
+  useEffect(() => {
+    if (!visible) return;
+
+    // 监听 visualViewport 变化来检测键盘高度
+    const handleResize = () => {
+      if (window.visualViewport) {
+        const vh = window.innerHeight;
+        const vvh = window.visualViewport.height;
+        const kbHeight = Math.max(0, vh - vvh);
+        setKeyboardHeight(kbHeight);
+      }
+    };
+
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', handleResize);
+      window.visualViewport.addEventListener('scroll', handleResize);
+      handleResize();
+      return () => {
+        window.visualViewport.removeEventListener('resize', handleResize);
+        window.visualViewport.removeEventListener('scroll', handleResize);
+      };
+    }
+  }, [visible]);
 
   if (!visible) return null;
 
@@ -91,10 +116,11 @@ export function TerminalKeyboard({ onKeyPress, visible = true }) {
 
   const keyboardContent = (
     <div
-      className="fixed bottom-0 left-0 right-0 z-50 border-t bg-gray-900"
+      className="fixed left-0 right-0 z-50 border-t bg-gray-900"
       style={{
+        bottom: `${keyboardHeight}px`,
         borderColor: '#374151',
-        paddingBottom: 'env(safe-area-inset-bottom)',
+        paddingBottom: keyboardHeight > 0 ? '0' : 'env(safe-area-inset-bottom)',
       }}
     >
       <div className="px-2 pt-2 pb-1 space-y-1.5">
