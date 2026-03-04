@@ -163,9 +163,13 @@ export function Terminal({
     const focusHandler = () => term.focus();
     container.addEventListener('mousedown', focusHandler);
 
+    let resizeDebounce = null;
     const observer = new ResizeObserver(() => {
-      safeFit(fitAddon);
-      scheduleSyncSize();
+      if (resizeDebounce) clearTimeout(resizeDebounce);
+      resizeDebounce = setTimeout(() => {
+        safeFit(fitAddon);
+        scheduleSyncSize();
+      }, 100);
     });
     observer.observe(container);
 
@@ -175,6 +179,7 @@ export function Terminal({
         clearTimeout(resizeTimerRef.current);
         resizeTimerRef.current = null;
       }
+      if (resizeDebounce) clearTimeout(resizeDebounce);
       inputDisposable.dispose();
       term.dispose();
       observer.disconnect();
