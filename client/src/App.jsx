@@ -366,8 +366,7 @@ export default function App() {
   useEffect(() => {
     if (!isMobile) return;
     if (!selectedProject) setMobilePane('projects');
-    else if (mobilePane === 'projects') setMobilePane('tasks');
-  }, [isMobile, selectedProject, mobilePane]);
+  }, [isMobile, selectedProject]);
 
   const mainChatPanel = (
     <div className="flex flex-col border-t h-full min-h-0 overflow-hidden" style={{ borderColor: 'var(--border)', minHeight: isMobile ? '0' : '250px', height: isMobile ? '100%' : '40%' }}>
@@ -398,7 +397,7 @@ export default function App() {
       </div>
       <div className="flex-1 min-h-0">
         {agentTerminalReady && agentTerminalSession && socket ? (
-          <Terminal socket={socket} sessionName={agentTerminalSession} />
+          <Terminal socket={socket} sessionName={agentTerminalSession} isMobile={isMobile} />
         ) : (
           <div className="h-full w-full flex items-center justify-center text-xs" style={{ color: 'var(--text-3)' }}>
             {agentTerminalError || 'Starting agent terminal...'}
@@ -511,6 +510,7 @@ export default function App() {
                 forceRedrawOnAttach={activeTaskMode !== 'codex'}
                 onStatusChange={setTaskTerminalStatus}
                 onFatalError={handleTaskTerminalFatalError}
+                isMobile={isMobile}
               />
             </div>
           </div>

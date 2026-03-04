@@ -1,8 +1,9 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import '@xterm/xterm/css/xterm.css';
+import { TerminalKeyboard } from './TerminalKeyboard';
 
 function safeFit(fitAddon) {
   try { fitAddon.fit(); } catch {}
@@ -32,8 +33,10 @@ export function Terminal({
   forceRedrawOnAttach = true,
   onStatusChange,
   onFatalError,
+  isMobile = false,
 }) {
   const containerRef = useRef(null);
+  const termRef = useRef(null);
   const lastSizeRef = useRef({ cols: 0, rows: 0 });
   const resizeTimerRef = useRef(null);
   const lastAttachAtRef = useRef(0);
@@ -68,6 +71,7 @@ export function Terminal({
       term.unicode.activeVersion = '11';
     } catch {}
     term.open(container);
+    termRef.current = term;
     statusCbRef.current?.('initializing terminal...');
 
     const syncSize = (force = false) => {
@@ -181,8 +185,25 @@ export function Terminal({
       socket.off('connect', onSocketConnect);
       socket.off('disconnect', onSocketDisconnect);
       container.removeEventListener('mousedown', focusHandler);
+      termRef.current = null;
     };
   }, [socket, sessionName, replayOnAttach, forceRedrawOnAttach]);
 
-  return <div ref={containerRef} className="w-full h-full terminal-host" style={{ overflow: 'hidden' }} />;
+  const handleKeyboardInput = (data) => {
+    if (socket && sessionName) {
+      socket.emit('terminal:input', { sessionName, data });
+      termRef.current?.focus();
+    }
+  };
+
+  return (
+    <div className="w-full h-full" style={{ overflow: 'hidden' }}>
+      <div
+        ref={containerRef}
+        className="terminal-host w-full h-full"
+        style={{ overflow: 'hidden' }}
+      />
+      {isMobile && <TerminalKeyboard visible onKeyPress={handleKeyboardInput} />}
+    </div>
+  );
 }
