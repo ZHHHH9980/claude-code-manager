@@ -41,7 +41,7 @@ export function TaskBoard({ tasks, adapters = [], onOpenTerminal, onStartTask, o
   }
 
   return (
-    <section className="flex-1 p-3 md:p-4 overflow-y-auto">
+    <section className={`${mobile ? 'h-full' : 'flex-1'} p-3 md:p-4 overflow-y-auto`}>
       <div className="mb-3 flex items-center justify-between">
         <div className="text-[11px] uppercase tracking-[0.16em]" style={{ color: 'var(--text-3)' }}>Tasks</div>
         <div className="flex items-center gap-2">
