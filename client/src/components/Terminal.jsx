@@ -117,7 +117,21 @@ export function Terminal({
     };
 
     // Set up listeners BEFORE attaching so we don't miss initial data.
-    const onTerminalData = (data) => term.write(data);
+    let writeBuffer = '';
+    let writeTimer = null;
+    const flushWrite = () => {
+      if (writeBuffer) {
+        term.write(writeBuffer);
+        writeBuffer = '';
+      }
+      writeTimer = null;
+    };
+    const onTerminalData = (data) => {
+      writeBuffer += data;
+      if (!writeTimer) {
+        writeTimer = setTimeout(flushWrite, 16); // ~60fps
+      }
+    };
     const handleTerminalError = (rawError, source = 'legacy') => {
       if (source === 'legacy' && Date.now() - lastStructuredErrorAtRef.current < 300) return;
       const err = normalizeTerminalError(rawError);
@@ -180,6 +194,10 @@ export function Terminal({
         resizeTimerRef.current = null;
       }
       if (resizeDebounce) clearTimeout(resizeDebounce);
+      if (writeTimer) {
+        clearTimeout(writeTimer);
+        flushWrite();
+      }
       inputDisposable.dispose();
       term.dispose();
       observer.disconnect();
@@ -208,7 +226,7 @@ export function Terminal({
         className="terminal-host w-full h-full"
         style={{ overflow: 'hidden' }}
       />
-      {isMobile && <TerminalKeyboard visible onKeyPress={handleKeyboardInput} />}
+      {isMobile && false && <TerminalKeyboard visible onKeyPress={handleKeyboardInput} />}
     </div>
   );
 }
