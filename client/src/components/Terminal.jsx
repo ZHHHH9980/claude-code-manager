@@ -72,6 +72,16 @@ export function Terminal({
     } catch {}
     term.open(container);
     termRef.current = term;
+
+    // 移动端：阻止系统键盘弹起，只用虚拟键盘
+    if (isMobile) {
+      const textarea = container.querySelector('textarea');
+      if (textarea) {
+        textarea.setAttribute('inputmode', 'none');
+        textarea.setAttribute('readonly', 'true');
+      }
+    }
+
     statusCbRef.current?.('initializing terminal...');
 
     const syncSize = (force = false) => {

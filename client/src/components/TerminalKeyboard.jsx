@@ -76,14 +76,14 @@ export function TerminalKeyboard({ onKeyPress, visible = true }) {
       type="button"
       onClick={() => handleKeyPress(keyCode || label)}
       className={`
-        px-2 py-2 text-xs font-mono rounded
+        px-1.5 py-1.5 text-[11px] font-mono rounded
         active:scale-95 transition-transform
         ${ctrlPressed && keyCode !== 'CTRL' ? 'bg-blue-500 text-white' : 'bg-gray-700 text-gray-100'}
         ${keyCode === 'CTRL' && ctrlPressed ? 'bg-blue-600 text-white ring-2 ring-blue-400' : ''}
         hover:bg-gray-600
         ${className}
       `}
-      style={{ minWidth: '44px', minHeight: '44px' }}
+      style={{ minWidth: '36px', minHeight: '36px' }}
     >
       {label}
     </button>
@@ -93,17 +93,17 @@ export function TerminalKeyboard({ onKeyPress, visible = true }) {
     <div
       className="fixed bottom-0 left-0 right-0 z-50 border-t bg-gray-900"
       style={{
-        borderColor: 'var(--border)',
+        borderColor: '#374151',
         paddingBottom: 'env(safe-area-inset-bottom)',
       }}
     >
-      {/* Main keyboard */}
-      <div className="p-2 space-y-2">
-        {/* Row 1: Control keys */}
-        <div className="flex gap-1 justify-between">
+      <div className="px-2 pt-2 pb-1 space-y-1.5">
+        {/* Row 1 */}
+        <div className="flex gap-1">
           <KeyButton label="ESC" keyCode="ESC" />
           <KeyButton label="TAB" keyCode="TAB" />
           <KeyButton label="CTRL" keyCode="CTRL" />
+          <div className="flex-1" />
           <KeyButton label="↑" keyCode="UP" />
           <KeyButton label="↓" keyCode="DOWN" />
           <KeyButton label="←" keyCode="LEFT" />
@@ -111,39 +111,32 @@ export function TerminalKeyboard({ onKeyPress, visible = true }) {
           <button
             type="button"
             onClick={() => setShowCtrlKeys(!showCtrlKeys)}
-            className="px-2 py-2 text-xs font-mono rounded bg-gray-700 text-gray-100 hover:bg-gray-600"
-            style={{ minWidth: '44px', minHeight: '44px' }}
+            className="px-1.5 py-1.5 text-[11px] font-mono rounded bg-gray-600 text-gray-300 hover:bg-gray-500"
+            style={{ minWidth: '36px', minHeight: '36px' }}
           >
             {showCtrlKeys ? '✕' : '^'}
           </button>
         </div>
 
-        {/* Row 2: Special characters */}
-        <div className="flex gap-1 justify-between">
-          <KeyButton label="`" />
-          <KeyButton label="~" />
-          <KeyButton label="|" />
-          <KeyButton label="/" />
-          <KeyButton label="\" />
-          <KeyButton label="-" />
-          <KeyButton label="=" />
-          <KeyButton label="[" />
-          <KeyButton label="]" />
+        {/* Row 2 */}
+        <div className="flex gap-1">
+          {['`', '~', '|', '/', '\\', '-', '=', '[', ']'].map(k => (
+            <KeyButton key={k} label={k} />
+          ))}
         </div>
 
-        {/* Ctrl shortcuts panel */}
+        {/* Ctrl shortcuts */}
         {showCtrlKeys && (
-          <div className="grid grid-cols-3 gap-1 p-2 rounded bg-gray-800">
+          <div className="grid grid-cols-5 gap-1 pt-1 border-t border-gray-700">
             {CTRL_KEYS.map(({ label, value, desc }) => (
               <button
                 key={label}
                 type="button"
                 onClick={() => onKeyPress && onKeyPress(value)}
-                className="px-2 py-2 text-xs font-mono rounded bg-gray-700 text-gray-100 hover:bg-gray-600 active:scale-95 transition-transform flex flex-col items-center"
-                style={{ minHeight: '44px' }}
+                className="py-1.5 text-[11px] font-mono rounded bg-gray-700 text-gray-100 hover:bg-gray-600 active:scale-95 transition-transform flex flex-col items-center"
               >
-                <span className="font-bold">{label}</span>
-                <span className="text-[10px] text-gray-400">{desc}</span>
+                <span className="font-bold text-blue-400">{label}</span>
+                <span className="text-[9px] text-gray-500">{desc}</span>
               </button>
             ))}
           </div>
@@ -151,8 +144,8 @@ export function TerminalKeyboard({ onKeyPress, visible = true }) {
       </div>
 
       {ctrlPressed && (
-        <div className="px-2 pb-2 text-xs text-center" style={{ color: 'var(--text-3)' }}>
-          Press any key to send Ctrl+Key
+        <div className="px-2 pb-1 text-[10px] text-center text-blue-400">
+          Ctrl+? — press a key
         </div>
       )}
     </div>
