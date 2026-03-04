@@ -123,7 +123,13 @@ app.get('/api/tasks', (req, res) => {
 });
 
 app.post('/api/tasks', (req, res) => {
-  const task = db.createTask(req.body);
+  const allAdapters = listAdapters();
+  const defaultAdapter = allAdapters[0] || { name: 'claude', defaultModel: 'claude-sonnet-4-5' };
+  const task = db.createTask({
+    ...req.body,
+    mode: req.body.mode || defaultAdapter.name,
+    model: req.body.model || defaultAdapter.defaultModel,
+  });
   syncTaskToNotion(task);
   res.json(task);
 });

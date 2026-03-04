@@ -28,8 +28,8 @@ db.exec(`
     branch TEXT,
     worktree_path TEXT,
     pty_session TEXT,
-    model TEXT DEFAULT 'claude-sonnet-4-5',
-    mode TEXT DEFAULT 'claude',
+    model TEXT,
+    mode TEXT,
     notion_id TEXT,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now')),
@@ -122,7 +122,7 @@ function createTask(data) {
   const id = uid();
   db.prepare(
     'INSERT INTO tasks (id, title, project_id, branch, model, mode) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(id, data.title, data.projectId, data.branch || '', data.model || 'claude-sonnet-4-5', data.mode || 'claude');
+  ).run(id, data.title, data.projectId, data.branch || '', data.model, data.mode);
   return getTask(id);
 }
 
