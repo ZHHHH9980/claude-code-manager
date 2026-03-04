@@ -63,6 +63,8 @@ export function Terminal({
       lineHeight: isMobile ? 1.25 : 1.2,
       scrollback: 5000,
       cursorBlink: true,
+      scrollSensitivity: isMobile ? 3 : 1,
+      smoothScrollDuration: 0,
     });
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
