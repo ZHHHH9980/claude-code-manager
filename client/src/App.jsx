@@ -21,8 +21,8 @@ const DEFAULT_ADAPTERS = [
     name: 'codex',
     label: 'Codex',
     color: '#10a37f',
-    models: [{ id: 'gpt-5.3-codex', label: 'GPT-5.3-Codex' }],
-    defaultModel: 'gpt-5.3-codex',
+    models: [{ id: 'gpt-5.4', label: 'GPT-5.4' }],
+    defaultModel: 'gpt-5.4',
     supportsChatMode: false,
   },
 ];

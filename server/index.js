@@ -19,6 +19,11 @@ const { resolveAdapter, listAdapters } = require('./adapters');
 const WORKFLOW_DIR = process.env.WORKFLOW_DIR || path.join(process.env.HOME, 'Documents/claude-workflow');
 const SESSIONS_DIR = path.join(__dirname, '../data/sessions');
 const DEFAULT_FRONTEND_ORIGINS = new Set(['http://localhost:8080', 'http://127.0.0.1:8080']);
+const MODEL_ALIASES = {
+  codex: {
+    'gpt-5.3-codex': 'gpt-5.4',
+  },
+};
 
 function parseFrontendOrigins(input) {
   return String(input || '')
@@ -36,6 +41,13 @@ function isAllowedOrigin(origin) {
   if (!origin) return true;
   if (allowAnyOrigin) return true;
   return allowedOriginSet.has(origin);
+}
+
+function normalizeAdapterModel(adapter, model) {
+  const adapterName = String(adapter?.name || '').trim().toLowerCase();
+  const rawModel = String(model || '').trim();
+  if (!rawModel) return adapter?.defaultModel || '';
+  return MODEL_ALIASES[adapterName]?.[rawModel] || rawModel;
 }
 
 const corsOptions = {
@@ -128,7 +140,7 @@ app.post('/api/tasks', (req, res) => {
   const task = db.createTask({
     ...req.body,
     mode: req.body.mode || defaultAdapter.name,
-    model: req.body.model || defaultAdapter.defaultModel,
+    model: normalizeAdapterModel(defaultAdapter, req.body.model || defaultAdapter.defaultModel),
   });
   syncTaskToNotion(task);
   res.json(task);
@@ -142,7 +154,7 @@ app.post('/api/tasks/:id/start', (req, res) => {
   if (resolved.usedLegacyAlias) {
     console.warn(`[adapter] legacy mode "${resolved.requestedName}" requested, fallback to "${resolved.resolvedName}"`);
   }
-  const finalModel = model || adapter.defaultModel;
+  const finalModel = normalizeAdapterModel(adapter, model);
   const safeTaskId = String(id).replace(/[^a-zA-Z0-9_-]/g, '').slice(-24) || 'task';
   const sessionName = `claude-task-${safeTaskId}`;
 
@@ -717,7 +729,7 @@ function isCommandAvailable(cmd) {
 
 function buildAdapterLaunchCommand(adapter, model) {
   const args = [];
-  const finalModel = String(model || adapter?.defaultModel || '').trim();
+  const finalModel = normalizeAdapterModel(adapter, model);
   if (finalModel) args.push('--model', finalModel);
   if (Array.isArray(adapter?.defaultArgs) && adapter.defaultArgs.length > 0) {
     args.push(...adapter.defaultArgs);
@@ -770,7 +782,7 @@ function ensureTaskProcess(task, opts = {}) {
   }
   const safeTaskId = String(task.id || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(-24) || 'task';
   const sessionName = task.pty_session || `claude-task-${safeTaskId}`;
-  const finalModel = task.model || adapter.defaultModel;
+  const finalModel = normalizeAdapterModel(adapter, task.model);
   let cwd = task.worktree_path;
   if (!cwd && task.project_id) {
     cwd = db.getProject(task.project_id)?.repo_path;

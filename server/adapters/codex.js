@@ -5,12 +5,13 @@ module.exports = {
   cli: 'codex',
   defaultArgs: ['--dangerously-bypass-approvals-and-sandbox'],
   models: [
+    { id: 'gpt-5.4', label: 'GPT-5.4' },
     { id: 'gpt-5.3-codex', label: 'GPT-5.3-Codex' },
     { id: 'gpt-5.3-codex-spark', label: 'GPT-5.3-Codex-Spark' },
     { id: 'gpt-5.2-codex', label: 'GPT-5.2-Codex' },
     { id: 'gpt-5-codex', label: 'GPT-5-Codex' },
   ],
-  defaultModel: 'gpt-5.3-codex',
+  defaultModel: 'gpt-5.4',
   autoConfirm: { enabled: false },
   chatMode: null,
 };
