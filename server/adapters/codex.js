@@ -3,7 +3,11 @@ module.exports = {
   label: 'Codex',
   color: '#10a37f',
   cli: 'codex',
-  defaultArgs: ['--dangerously-bypass-approvals-and-sandbox'],
+  defaultArgs: [
+    '-c',
+    '\'model_reasoning_effort="high"\'',
+    '--dangerously-bypass-approvals-and-sandbox',
+  ],
   models: [
     { id: 'gpt-5.4', label: 'GPT-5.4' },
     { id: 'gpt-5.3-codex', label: 'GPT-5.3-Codex' },
