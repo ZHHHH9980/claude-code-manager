@@ -15,6 +15,7 @@ db.exec(`
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     repo_path TEXT,
+    github_repo TEXT,
     ssh_host TEXT,
     notion_id TEXT,
     created_at TEXT DEFAULT (datetime('now'))
@@ -59,6 +60,14 @@ db.exec(`
   );
 `);
 
+function ensureProjectSchema() {
+  const cols = db.prepare("PRAGMA table_info('projects')").all();
+  const names = new Set(cols.map((c) => c.name));
+  if (!names.has('github_repo')) {
+    db.exec('ALTER TABLE projects ADD COLUMN github_repo TEXT');
+  }
+}
+
 function ensureTaskSchema() {
   const cols = db.prepare("PRAGMA table_info('tasks')").all();
   const names = new Set(cols.map((c) => c.name));
@@ -73,6 +82,7 @@ function ensureTaskSchema() {
   }
 }
 
+ensureProjectSchema();
 ensureTaskSchema();
 
 function uid() {
@@ -87,20 +97,34 @@ function getProject(id) {
   return db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
 }
 
+function normalizeProjectValue(...values) {
+  for (const value of values) {
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
 function createProject(data) {
   const id = uid();
-  db.prepare('INSERT INTO projects (id, name, repo_path, ssh_host) VALUES (?, ?, ?, ?)').run(
-    id, data.name, data.repoPath || '', data.sshHost || ''
+  const repoPath = normalizeProjectValue(data.repoPath, data.repo_path) || '';
+  const githubRepo = normalizeProjectValue(data.githubRepo, data.github_repo) || '';
+  const sshHost = normalizeProjectValue(data.sshHost, data.ssh_host) || '';
+  db.prepare('INSERT INTO projects (id, name, repo_path, github_repo, ssh_host) VALUES (?, ?, ?, ?, ?)').run(
+    id, data.name, repoPath, githubRepo, sshHost
   );
-  return { id, ...data };
+  return getProject(id);
 }
 
 function updateProject(id, data) {
   const fields = [];
   const values = [];
   if (data.name !== undefined) { fields.push('name = ?'); values.push(data.name); }
-  if (data.repo_path !== undefined) { fields.push('repo_path = ?'); values.push(data.repo_path); }
-  if (data.ssh_host !== undefined) { fields.push('ssh_host = ?'); values.push(data.ssh_host); }
+  const repoPath = normalizeProjectValue(data.repoPath, data.repo_path);
+  if (repoPath !== undefined) { fields.push('repo_path = ?'); values.push(repoPath); }
+  const githubRepo = normalizeProjectValue(data.githubRepo, data.github_repo);
+  if (githubRepo !== undefined) { fields.push('github_repo = ?'); values.push(githubRepo); }
+  const sshHost = normalizeProjectValue(data.sshHost, data.ssh_host);
+  if (sshHost !== undefined) { fields.push('ssh_host = ?'); values.push(sshHost); }
   if (fields.length === 0) return getProject(id);
   values.push(id);
   db.prepare(`UPDATE projects SET ${fields.join(', ')} WHERE id = ?`).run(...values);

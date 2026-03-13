@@ -91,6 +91,17 @@ export default function App() {
   const [isMobile, setIsMobile] = useState(() => window.matchMedia?.('(max-width: 767px)').matches ?? false);
   const [mobilePane, setMobilePane] = useState('tasks');
 
+  async function loadProjects(preferredProjectId = null) {
+    const rows = await fetch(`${API_BASE_URL}/api/projects`).then((r) => r.json());
+    const nextProjects = Array.isArray(rows) ? rows : [];
+    setProjects(nextProjects);
+    if (preferredProjectId) {
+      const preferred = nextProjects.find((project) => String(project.id) === String(preferredProjectId));
+      setSelectedProject(preferred || nextProjects[0] || null);
+    }
+    return nextProjects;
+  }
+
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem('ccm-theme', theme);
@@ -101,7 +112,8 @@ export default function App() {
   }, [agentTerminalMode]);
 
   useEffect(() => {
-    fetch(`${API_BASE_URL}/api/projects`).then((r) => r.json()).then(setProjects);
+    loadProjects().catch(() => setProjects([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -225,10 +237,42 @@ export default function App() {
   }
 
   function refreshAll() {
-    fetch(`${API_BASE_URL}/api/projects`).then((r) => r.json()).then(setProjects);
+    loadProjects(selectedProject?.id).catch(() => {});
     if (selectedProject) {
       fetch(`${API_BASE_URL}/api/tasks?projectId=${selectedProject.id}`).then((r) => r.json()).then(setTasks);
     }
+  }
+
+  async function handleCreateProject({ name, repoPath, githubRepo }) {
+    const res = await fetch(`${API_BASE_URL}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, repoPath, githubRepo }),
+    });
+    let payload = {};
+    try { payload = await res.json(); } catch {}
+    if (!res.ok || !payload?.id) {
+      window.alert(`Failed to create project: ${payload?.error || 'unknown error'}`);
+      return false;
+    }
+    await loadProjects(payload.id);
+    return true;
+  }
+
+  async function handleUpdateProject(projectId, updates) {
+    const res = await fetch(`${API_BASE_URL}/api/projects/${projectId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    });
+    let payload = {};
+    try { payload = await res.json(); } catch {}
+    if (!res.ok || !payload?.id) {
+      window.alert(`Failed to update project: ${payload?.error || 'unknown error'}`);
+      return false;
+    }
+    await loadProjects(payload.id);
+    return true;
   }
 
   async function handleStartTask(task, mode) {
@@ -455,7 +499,14 @@ export default function App() {
             </div>
             <div className="flex-1 min-h-0">
               {mobilePane === 'projects' && (
-                <ProjectList projects={projects} selectedId={selectedProject?.id} onSelect={setSelectedProject} mobile />
+                <ProjectList
+                  projects={projects}
+                  selectedId={selectedProject?.id}
+                  onSelect={setSelectedProject}
+                  onCreateProject={handleCreateProject}
+                  onUpdateProject={handleUpdateProject}
+                  mobile
+                />
               )}
               {mobilePane === 'tasks' && (
                 <TaskBoard tasks={tasks} adapters={adapters} onOpenTerminal={handleOpenTask} onStartTask={handleStartTask} onDeleteTask={handleDeleteTask} onCreateTask={handleCreateTask} mobile />
@@ -465,7 +516,13 @@ export default function App() {
           </div>
         ) : (
           <>
-            <ProjectList projects={projects} selectedId={selectedProject?.id} onSelect={setSelectedProject} />
+            <ProjectList
+              projects={projects}
+              selectedId={selectedProject?.id}
+              onSelect={setSelectedProject}
+              onCreateProject={handleCreateProject}
+              onUpdateProject={handleUpdateProject}
+            />
             <div className="flex flex-col flex-1 min-w-0 min-h-0">
               <TaskBoard tasks={tasks} adapters={adapters} onOpenTerminal={handleOpenTask} onStartTask={handleStartTask} onDeleteTask={handleDeleteTask} onCreateTask={handleCreateTask} />
               {mainChatPanel}

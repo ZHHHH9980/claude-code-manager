@@ -9,7 +9,7 @@ const { randomUUID } = require('crypto');
 const { execSync, exec, spawn } = require('child_process');
 const { StringDecoder } = require('string_decoder');
 const db = require('./db');
-const { syncTaskToNotion } = require('./notion-sync');
+const { syncProjectToNotion, syncTaskToNotion } = require('./notion-sync');
 const ptyManager = require('./pty-manager');
 const { TaskChatRuntimeManager } = require('./task-chat-runtime');
 const { buildClaudeEnv } = require('./claude-env');
@@ -117,6 +117,7 @@ app.get('/api/adapters', (req, res) => {
 
 app.post('/api/projects', (req, res) => {
   const project = db.createProject(req.body);
+  syncProjectToNotion(project);
   res.json(project);
 });
 
@@ -125,6 +126,7 @@ app.put('/api/projects/:id', (req, res) => {
   const existing = db.getProject(id);
   if (!existing) return res.status(404).json({ error: 'project not found' });
   const updated = db.updateProject(id, req.body);
+  syncProjectToNotion(updated);
   res.json(updated);
 });
 
@@ -175,6 +177,8 @@ app.post('/api/tasks/:id/start', (req, res) => {
     mode: adapter.name,
     model: finalModel,
   });
+  const project = task?.project_id ? db.getProject(task.project_id) : null;
+  const sessionEnvExports = buildProjectContextEnvExports(task, project);
   syncTaskToNotion(task);
 
   // Initialize claude-workflow in worktree
@@ -194,7 +198,12 @@ app.post('/api/tasks/:id/start', (req, res) => {
     ptyManager.ensureSession(sessionName, worktreePath);
     setTimeout(() => {
       try {
-        launchAdapterInSession(sessionName, { adapter, model: finalModel, context: `start task ${id}` });
+        launchAdapterInSession(sessionName, {
+          adapter,
+          model: finalModel,
+          context: `start task ${id}`,
+          sessionEnvExports,
+        });
       } catch (err) {
         ptyOk = false;
         error = err?.message || String(err);
@@ -743,24 +752,47 @@ function shellQuote(value) {
 }
 
 function buildAdapterEnvExports(adapter) {
-  if (!adapter || adapter.cli !== 'claude') return '';
-  const env = buildClaudeEnv();
+  const exports = [];
+  if (adapter?.cli === 'claude') {
+    const env = buildClaudeEnv();
+    exports.push(
+      ['ANTHROPIC_BASE_URL', env.ANTHROPIC_BASE_URL],
+      ['ANTHROPIC_AUTH_TOKEN', env.ANTHROPIC_AUTH_TOKEN],
+    );
+  }
+  const lines = exports
+    .filter(([, val]) => typeof val === 'string' && val.trim())
+    .map(([key, val]) => `export ${key}=${shellQuote(val)}`);
+  if (adapter?.cli === 'claude') {
+    lines.push('unset ANTHROPIC_API_KEY APIKEY API_KEY');
+  }
+  return lines.join('; ');
+}
+
+function buildProjectContextEnvExports(task, project) {
   const exports = [
-    ['ANTHROPIC_BASE_URL', env.ANTHROPIC_BASE_URL],
-    ['ANTHROPIC_AUTH_TOKEN', env.ANTHROPIC_AUTH_TOKEN],
-  ]
+    ['CCM_TASK_ID', task?.id || ''],
+    ['CCM_TASK_TITLE', task?.title || ''],
+    ['CCM_TASK_BRANCH', task?.branch || ''],
+    ['CCM_PROJECT_ID', project?.id || task?.project_id || ''],
+    ['CCM_PROJECT_NAME', project?.name || ''],
+    ['CCM_PROJECT_REPO_PATH', project?.repo_path || task?.worktree_path || ''],
+    ['CCM_PROJECT_GITHUB_REPO', project?.github_repo || ''],
+  ];
+  return exports
     .filter(([, val]) => typeof val === 'string' && val.trim())
     .map(([key, val]) => `export ${key}=${shellQuote(val)}`)
     .join('; ');
-  const unsets = 'unset ANTHROPIC_API_KEY APIKEY API_KEY';
-  return exports ? `${exports}; ${unsets}` : unsets;
 }
 
-function launchAdapterInSession(sessionName, { adapter, model, context }) {
+function launchAdapterInSession(sessionName, { adapter, model, context, sessionEnvExports }) {
   const adapterExports = buildAdapterEnvExports(adapter);
   ptyManager.sendInput(sessionName, 'export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 LC_CTYPE=en_US.UTF-8\n');
   if (adapterExports) {
     ptyManager.sendInput(sessionName, `${adapterExports}\n`);
+  }
+  if (sessionEnvExports) {
+    ptyManager.sendInput(sessionName, `${sessionEnvExports}\n`);
   }
   ptyManager.sendInput(sessionName, `${buildAdapterLaunchCommand(adapter, model)}\n`);
   if (adapter?.autoConfirm?.enabled) {
@@ -784,10 +816,12 @@ function ensureTaskProcess(task, opts = {}) {
   const sessionName = task.pty_session || `claude-task-${safeTaskId}`;
   const finalModel = normalizeAdapterModel(adapter, task.model);
   let cwd = task.worktree_path;
+  const project = task.project_id ? db.getProject(task.project_id) : null;
   if (!cwd && task.project_id) {
-    cwd = db.getProject(task.project_id)?.repo_path;
+    cwd = project?.repo_path;
   }
   if (!cwd) return null;
+  const sessionEnvExports = buildProjectContextEnvExports(task, project);
 
   if (ensurePty) {
     const existed = ptyManager.sessionExists(sessionName);
@@ -800,7 +834,12 @@ function ensureTaskProcess(task, opts = {}) {
               console.warn(`task ${task.id} launch skipped: CLI not found: ${adapter.cli}`);
               return;
             }
-            launchAdapterInSession(sessionName, { adapter, model: finalModel, context: `ensure task ${task.id}` });
+            launchAdapterInSession(sessionName, {
+              adapter,
+              model: finalModel,
+              context: `ensure task ${task.id}`,
+              sessionEnvExports,
+            });
           } catch (err) {
             console.warn(`pty sendInput failed for task ${task.id}:`, err?.message || err);
           }
@@ -880,6 +919,8 @@ function buildTaskScopedPrompt(task, project, userMessage, history = []) {
     `- pty_session: ${task?.pty_session || ''}`,
     `- project_id: ${task?.project_id || ''}`,
     `- project_name: ${project?.name || ''}`,
+    `- project_repo_path: ${project?.repo_path || ''}`,
+    `- project_github_repo: ${project?.github_repo || ''}`,
     ...historyLines,
     '',
     'Current user message:',
@@ -903,11 +944,13 @@ function buildTaskSessionPrompt(task, project, userMessage, bootstrap = false) {
       `- status: ${task?.status || ''}`,
       `- branch: ${task?.branch || ''}`,
       `- project_name: ${project?.name || ''}`,
+      `- project_repo_path: ${project?.repo_path || ''}`,
+      `- project_github_repo: ${project?.github_repo || ''}`,
       '',
     );
   } else {
     lines.push(
-      `Task scope reminder: task_id=${task?.id || ''}, title="${task?.title || ''}", branch="${task?.branch || ''}", project="${project?.name || ''}".`,
+      `Task scope reminder: task_id=${task?.id || ''}, title="${task?.title || ''}", branch="${task?.branch || ''}", project="${project?.name || ''}", github_repo="${project?.github_repo || ''}".`,
       'Continue in the same task-scoped conversation context.',
       '',
     );
@@ -940,6 +983,7 @@ function buildTaskStatusReply(task, project, hasActiveProcess) {
   const branch = task?.branch || '(none)';
   const updatedAt = task?.updated_at || task?.created_at || '(unknown)';
   const projectName = project?.name || '(unknown)';
+  const githubRepo = project?.github_repo || '(not set)';
   const running = hasActiveProcess ? 'yes' : 'no';
   return [
     'Current task progress summary:',
@@ -948,6 +992,7 @@ function buildTaskStatusReply(task, project, hasActiveProcess) {
     `- running process attached: ${running}`,
     `- branch: ${branch}`,
     `- project: ${projectName}`,
+    `- github repo: ${githubRepo}`,
     `- last updated: ${updatedAt}`,
     '',
     'If you want, I can continue with a concrete next action (for example: integrate ChatWindow, run build, or deploy).',
@@ -1427,7 +1472,13 @@ function recoverSessions() {
                 console.warn(`recover task ${task.id} skipped: CLI not found: ${adapter.cli}`);
                 return;
               }
-              launchAdapterInSession(task.pty_session, { adapter, model: task.model || adapter.defaultModel, context: `recover task ${task.id}` });
+              const project = task?.project_id ? db.getProject(task.project_id) : null;
+              launchAdapterInSession(task.pty_session, {
+                adapter,
+                model: task.model || adapter.defaultModel,
+                context: `recover task ${task.id}`,
+                sessionEnvExports: buildProjectContextEnvExports(task, project),
+              });
             } catch {}
           }, 500);
 

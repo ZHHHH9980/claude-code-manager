@@ -1,22 +1,67 @@
 import { useState } from 'react';
 
-export function ProjectList({ projects, selectedId, onSelect, onCreateProject, mobile = false }) {
+export function ProjectList({
+  projects,
+  selectedId,
+  onSelect,
+  onCreateProject,
+  onUpdateProject,
+  mobile = false,
+}) {
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState('');
   const [repoPath, setRepoPath] = useState('');
+  const [githubRepo, setGithubRepo] = useState('');
+  const [editingId, setEditingId] = useState(null);
+  const [editName, setEditName] = useState('');
+  const [editRepoPath, setEditRepoPath] = useState('');
+  const [editGithubRepo, setEditGithubRepo] = useState('');
 
-  function handleSubmit(e) {
+  async function handleSubmit(e) {
     e.preventDefault();
     const projectName = name.trim();
     if (!projectName || typeof onCreateProject !== 'function') return;
-    onCreateProject({ name: projectName, repoPath: repoPath.trim() });
+    const ok = await onCreateProject({
+      name: projectName,
+      repoPath: repoPath.trim(),
+      githubRepo: githubRepo.trim(),
+    });
+    if (!ok) return;
     setName('');
     setRepoPath('');
+    setGithubRepo('');
     setShowForm(false);
   }
 
+  function startEditing(project) {
+    setEditingId(project.id);
+    setEditName(project.name || '');
+    setEditRepoPath(project.repo_path || '');
+    setEditGithubRepo(project.github_repo || '');
+  }
+
+  function stopEditing() {
+    setEditingId(null);
+    setEditName('');
+    setEditRepoPath('');
+    setEditGithubRepo('');
+  }
+
+  async function handleUpdateSubmit(e, projectId) {
+    e.preventDefault();
+    const projectName = editName.trim();
+    if (!projectName || typeof onUpdateProject !== 'function') return;
+    const ok = await onUpdateProject(projectId, {
+      name: projectName,
+      repoPath: editRepoPath.trim(),
+      githubRepo: editGithubRepo.trim(),
+    });
+    if (!ok) return;
+    stopEditing();
+  }
+
   return (
-    <aside className={`w-full ${mobile ? 'h-full' : 'md:w-64'} border-b md:border-b-0 md:border-r p-3 md:p-4 flex flex-col`} style={{ borderColor: 'var(--border)' }}>
+    <aside className={`w-full ${mobile ? 'h-full' : 'md:w-72'} border-b md:border-b-0 md:border-r p-3 md:p-4 flex flex-col`} style={{ borderColor: 'var(--border)' }}>
       <div className="mb-3 flex items-center justify-between">
         <div className="text-[11px] uppercase tracking-[0.16em]" style={{ color: 'var(--text-3)' }}>Projects</div>
         {typeof onCreateProject === 'function' && (
@@ -46,6 +91,13 @@ export function ProjectList({ projects, selectedId, onSelect, onCreateProject, m
             className="w-full text-xs px-3 py-2 rounded-lg border outline-none"
             style={{ borderColor: 'var(--border)', background: 'var(--surface-2)', color: 'var(--text-2)' }}
           />
+          <input
+            value={githubRepo}
+            onChange={(e) => setGithubRepo(e.target.value)}
+            placeholder="GitHub repo (owner/repo or URL)"
+            className="w-full text-xs px-3 py-2 rounded-lg border outline-none"
+            style={{ borderColor: 'var(--border)', background: 'var(--surface-2)', color: 'var(--text-2)' }}
+          />
           <button type="submit" className="ccm-button ccm-button-accent text-xs px-3 py-1.5 w-full">
             Create
           </button>
@@ -58,30 +110,79 @@ export function ProjectList({ projects, selectedId, onSelect, onCreateProject, m
         )}
         {projects.map((p) => {
           const selected = selectedId === p.id;
+          const isEditing = editingId === p.id;
           return (
-            <button
+            <div
               key={p.id}
-              onClick={() => onSelect(p)}
-              className="w-full text-left px-3 py-2 rounded-xl text-sm border transition"
+              className="rounded-xl border transition"
               style={selected
                 ? {
                     borderColor: 'var(--accent-2)',
                     background: 'color-mix(in srgb, var(--accent-2) 20%, var(--surface-2))',
-                    color: 'var(--text-1)',
                   }
                 : {
                     borderColor: 'var(--border)',
                     background: 'var(--surface-2)',
-                    color: 'var(--text-2)',
                   }}
             >
-              <div className="font-medium truncate">{p.name}</div>
-              {p.repo_path && (
-                <div className="text-[11px] mt-1 truncate" style={{ color: 'var(--text-3)' }}>
-                  {p.repo_path}
+              <button
+                onClick={() => onSelect(p)}
+                className="w-full text-left px-3 py-2 rounded-xl text-sm"
+                style={{ color: selected ? 'var(--text-1)' : 'var(--text-2)' }}
+              >
+                <div className="font-medium truncate">{p.name}</div>
+                <div className="text-[11px] mt-1 space-y-1" style={{ color: 'var(--text-3)' }}>
+                  <div className="truncate">{p.repo_path || 'No repo path'}</div>
+                  {p.github_repo ? (
+                    <div className="truncate">GitHub: {p.github_repo}</div>
+                  ) : null}
+                </div>
+              </button>
+
+              {selected && typeof onUpdateProject === 'function' && (
+                <div className="px-3 pb-3">
+                  {isEditing ? (
+                    <form onSubmit={(e) => handleUpdateSubmit(e, p.id)} className="space-y-2 border-t pt-3" style={{ borderColor: 'var(--border)' }}>
+                      <input
+                        value={editName}
+                        onChange={(e) => setEditName(e.target.value)}
+                        placeholder="Project name"
+                        className="w-full text-sm px-3 py-2 rounded-lg border outline-none"
+                        style={{ borderColor: 'var(--border)', background: 'var(--surface-1)', color: 'var(--text-1)' }}
+                      />
+                      <input
+                        value={editRepoPath}
+                        onChange={(e) => setEditRepoPath(e.target.value)}
+                        placeholder="Repo path"
+                        className="w-full text-xs px-3 py-2 rounded-lg border outline-none"
+                        style={{ borderColor: 'var(--border)', background: 'var(--surface-1)', color: 'var(--text-2)' }}
+                      />
+                      <input
+                        value={editGithubRepo}
+                        onChange={(e) => setEditGithubRepo(e.target.value)}
+                        placeholder="GitHub repo (owner/repo or URL)"
+                        className="w-full text-xs px-3 py-2 rounded-lg border outline-none"
+                        style={{ borderColor: 'var(--border)', background: 'var(--surface-1)', color: 'var(--text-2)' }}
+                      />
+                      <div className="flex gap-2">
+                        <button type="submit" className="ccm-button ccm-button-accent text-xs px-3 py-1.5 flex-1">
+                          Save
+                        </button>
+                        <button type="button" onClick={stopEditing} className="ccm-button ccm-button-soft text-xs px-3 py-1.5">
+                          Cancel
+                        </button>
+                      </div>
+                    </form>
+                  ) : (
+                    <div className="border-t pt-3" style={{ borderColor: 'var(--border)' }}>
+                      <button type="button" onClick={() => startEditing(p)} className="ccm-button ccm-button-soft text-xs px-3 py-1.5 w-full">
+                        Edit Project
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
-            </button>
+            </div>
           );
         })}
       </div>

@@ -4,6 +4,7 @@ struct CCMProject: Codable, Identifiable, Hashable {
     let id: String
     let name: String
     let repoPath: String?
+    let githubRepo: String?
     let sshHost: String?
     let createdAt: String?
 }

@@ -247,6 +247,13 @@ struct ContentView: View {
                                     .foregroundStyle(CCMColors.textSecondary)
                                     .lineLimit(1)
                                     .frame(maxWidth: .infinity, alignment: .leading)
+                                if let githubRepo = project.githubRepo, !githubRepo.isEmpty {
+                                    Text("GitHub: \(githubRepo)")
+                                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                                        .foregroundStyle(CCMColors.textMuted)
+                                        .lineLimit(1)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
                             }
                             Image(systemName: "chevron.right")
                                 .font(.system(size: 11, weight: .bold))
