@@ -35,6 +35,8 @@ function fromEventError(event) {
 export function AssistantChatWindow({
   title,
   endpoint,
+  historyEndpoint,
+  clearEndpoint,
   placeholder,
   assistantLabel = 'CCM',
   buildBody,
@@ -46,7 +48,9 @@ export function AssistantChatWindow({
 }) {
   const [internalMessages, setInternalMessages] = useState([]);
   const [phase, setPhase] = useState('idle');
+  const [historyLoading, setHistoryLoading] = useState(false);
   const abortRef = useRef(null);
+  const historyLoadRef = useRef(0);
   const controlled = Array.isArray(messages);
   const currentMessages = controlled ? messages : internalMessages;
   const messagesRef = useRef(currentMessages);
@@ -68,6 +72,47 @@ export function AssistantChatWindow({
       return typeof next === 'function' ? next(prev) : next;
     });
   }
+
+  useEffect(() => {
+    if (!historyEndpoint) return undefined;
+    const requestId = historyLoadRef.current + 1;
+    historyLoadRef.current = requestId;
+    const controller = new AbortController();
+    setHistoryLoading(true);
+
+    fetch(historyEndpoint, { signal: controller.signal })
+      .then(async (res) => {
+        let payload = {};
+        try {
+          payload = await res.json();
+        } catch {}
+        if (!res.ok) {
+          throw new Error(payload?.error || `failed to load history (${res.status})`);
+        }
+        if (historyLoadRef.current !== requestId) return;
+        const rows = Array.isArray(payload?.messages) ? payload.messages : [];
+        const normalized = rows
+          .filter((item) => item && (item.role === 'user' || item.role === 'assistant'))
+          .map((item) => ({
+            role: item.role,
+            text: String(item.text || ''),
+          }));
+        setMessages(normalized);
+      })
+      .catch((err) => {
+        if (controller.signal.aborted) return;
+        if (historyLoadRef.current !== requestId) return;
+        setMessages((prev) => {
+          if (Array.isArray(prev) && prev.length > 0) return prev;
+          return [{ role: 'assistant', text: `Error: ${normalizeErrMessage(err)}` }];
+        });
+      })
+      .finally(() => {
+        if (historyLoadRef.current === requestId) setHistoryLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [historyEndpoint]);
 
   const typing = useMemo(() => {
     if (phase !== 'sending' && phase !== 'streaming') return undefined;
@@ -198,6 +243,9 @@ export function AssistantChatWindow({
     }
     setPhase('idle');
     setMessages([]);
+    if (clearEndpoint) {
+      fetch(clearEndpoint, { method: 'DELETE' }).catch(() => {});
+    }
     if (typeof onClear === 'function') onClear();
   };
 
@@ -215,7 +263,7 @@ export function AssistantChatWindow({
           <span className="truncate">{title}</span>
         </div>
         <div className="flex items-center gap-2">
-          <span>{getStatusLabel(phase)}</span>
+          <span>{historyLoading ? 'Loading history...' : getStatusLabel(phase)}</span>
           <button type="button" onClick={handleClear} className="ccm-button ccm-button-soft text-xs px-2 py-0.5">Clear</button>
         </div>
       </div>
