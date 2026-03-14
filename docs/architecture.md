@@ -4,7 +4,7 @@ Detailed technical documentation for Claude Code Manager internals.
 
 ## Communication Patterns
 
-Three communication channels between frontend and backend:
+Two communication channels between frontend and backend:
 
 ```mermaid
 sequenceDiagram
@@ -28,15 +28,6 @@ sequenceDiagram
         P-->>S: PTY stdout data
         S-->>B: terminal:data (output)
     end
-
-    Note over B,C: 3. SSE — Chat Streaming
-    B->>S: POST /api/tasks/:id/chat {message}
-    S->>C: Send to Claude process
-    loop Stream
-        C-->>S: JSON chunks
-        S-->>B: SSE data: {text}
-    end
-    S-->>B: SSE data: {done: true}
 ```
 
 ## Task Lifecycle
@@ -133,7 +124,6 @@ flowchart TB
 ```mermaid
 erDiagram
     projects ||--o{ tasks : has
-    tasks ||--o{ task_chat_messages : has
 
     projects {
         text id PK
@@ -154,20 +144,6 @@ erDiagram
         text pty_session
         text model
         text mode "claude | codex"
-        text chat_session_id
-    }
-
-    task_chat_messages {
-        int id PK
-        text task_id FK
-        text role "user | assistant"
-        text text
-    }
-
-    agent_chat_messages {
-        int id PK
-        text role
-        text text
     }
 
     kv_store {
@@ -184,7 +160,6 @@ claude-code-manager/
 │   ├── index.js              # Express entry point, routes, socket.io
 │   ├── db.js                 # SQLite (WAL mode, auto-migration)
 │   ├── pty-manager.js        # PTY session lifecycle & buffer
-│   ├── task-chat-runtime.js  # Claude chat with session persistence
 │   ├── file-watcher.js       # PROGRESS.md → Notion sync
 │   ├── notion-sync.js        # Async Notion API (non-blocking)
 │   ├── claude-env.js         # Claude environment setup
@@ -197,8 +172,7 @@ claude-code-manager/
 │   │   ├── components/
 │   │   │   ├── Terminal.jsx       # xterm.js + socket.io
 │   │   │   ├── TaskBoard.jsx      # Task list & actions
-│   │   │   ├── ProjectList.jsx    # Project CRUD
-│   │   │   └── AssistantChatWindow.jsx  # SSE chat UI
+│   │   │   └── ProjectList.jsx    # Project CRUD
 │   │   ├── hooks/
 │   │   │   └── useSocket.js       # Socket.io singleton
 │   │   └── config.js             # API base URL
@@ -224,8 +198,5 @@ claude-code-manager/
 | POST | `/api/tasks/:id/start` | Start CLI session |
 | POST | `/api/tasks/:id/stop` | Stop session |
 | DELETE | `/api/tasks/:id` | Delete task |
-| POST | `/api/tasks/:id/chat` | Task-scoped chat (SSE) |
-| GET | `/api/tasks/:id/chat/history` | Chat history |
-| POST | `/api/agent` | Global agent chat (SSE) |
 | POST | `/api/deploy` | Trigger deploy.sh |
 | POST | `/api/webhook/github` | GitHub push auto-deploy |

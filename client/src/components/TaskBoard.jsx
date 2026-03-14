@@ -22,7 +22,7 @@ function modeBadge(name, label) {
   return badge || String(name || 'AG').slice(0, 2).toUpperCase();
 }
 
-export function TaskBoard({ tasks, adapters = [], onOpenTerminal, onOpenChat, onStartTask, onDeleteTask, onCreateTask, mobile = false }) {
+export function TaskBoard({ tasks, adapters = [], onOpenTerminal, onStartTask, onDeleteTask, onCreateTask, mobile = false }) {
   const [showForm, setShowForm] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const availableAdapters = adapters.length > 0 ? adapters : [
@@ -130,12 +130,11 @@ export function TaskBoard({ tasks, adapters = [], onOpenTerminal, onOpenChat, on
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      if (typeof onOpenChat === 'function') onOpenChat(task);
-                      else onOpenTerminal(task);
+                      onOpenTerminal(task);
                     }}
                     className={`ccm-button ccm-button-accent text-xs px-2.5 py-1.5 ${mobile ? 'w-full' : ''}`}
                   >
-                    Chat
+                    Terminal
                   </button>
                 )}
 

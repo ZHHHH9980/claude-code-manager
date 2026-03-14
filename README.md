@@ -10,15 +10,12 @@ graph TB
         PL[ProjectList]
         TB[TaskBoard]
         TM["Terminal (xterm.js)"]
-        CW[AssistantChatWindow]
     end
 
     subgraph Server["Express Server :3000"]
         API[REST API]
         SIO[socket.io]
-        SSE[SSE Stream]
         PTY[PTY Manager<br/>node-pty]
-        CR[Chat Runtime]
         DB[(SQLite)]
         AD[Adapter System]
     end
@@ -32,19 +29,16 @@ graph TB
 
     PL & TB -->|REST| API
     TM <-->|WebSocket| SIO
-    CW -->|SSE| SSE
 
     API --> DB
     SIO <--> PTY
-    SSE --> CR
-    CR --> AD
     PTY --> AD
     AD --> CC & CX
 
     SS -->|serves| Browser
 ```
 
-Three communication channels: REST (CRUD), WebSocket (terminal I/O), SSE (chat streaming). See [docs/architecture.md](docs/architecture.md) for detailed diagrams.
+Two communication channels: REST (CRUD) and WebSocket (terminal I/O). See [docs/architecture.md](docs/architecture.md) for detailed diagrams.
 
 ## Quick Start
 

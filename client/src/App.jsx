@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { ProjectList } from './components/ProjectList';
 import { TaskBoard } from './components/TaskBoard';
 import { Terminal } from './components/Terminal';
-import { AssistantChatWindow } from './components/AssistantChatWindow';
+
 import { useSocket } from './hooks/useSocket';
 import { API_BASE_URL } from './config';
 
@@ -69,8 +69,8 @@ export default function App() {
   const [activeTaskMode, setActiveTaskMode] = useState('');
   const [isTaskTerminalOpen, setIsTaskTerminalOpen] = useState(false);
   const [taskTerminalStatus, setTaskTerminalStatus] = useState('');
-  const [taskModalTab, setTaskModalTab] = useState('terminal');
-  const [agentPanelTab, setAgentPanelTab] = useState('terminal');
+
+
 
   const { socket } = useSocket();
   const [agentTerminalSession, setAgentTerminalSession] = useState(null);
@@ -195,7 +195,6 @@ export default function App() {
     setActiveTaskId(null);
     setActiveTaskTitle('');
     setActiveTaskMode('');
-    setTaskModalTab('terminal');
     setTaskTerminalStatus('');
     setIsTaskTerminalOpen(false);
   }
@@ -214,7 +213,7 @@ export default function App() {
     return payload;
   }
 
-  async function openTaskTerminalWithStateCheck(task, nextTab = 'terminal') {
+  async function openTaskTerminalWithStateCheck(task) {
     if (!task?.pty_session) return false;
     try {
       const state = await fetchTerminalState(task.pty_session);
@@ -229,7 +228,6 @@ export default function App() {
       setActiveTaskId(task.id);
       setActiveTaskTitle(task.title || task.pty_session);
       setActiveTaskMode(task.mode || '');
-      setTaskModalTab(nextTab === 'chat' ? 'chat' : 'terminal');
       setTaskTerminalStatus('opening terminal...');
       setIsTaskTerminalOpen(true);
       return true;
@@ -306,7 +304,6 @@ export default function App() {
     setActiveTaskId(task.id);
     setActiveTaskTitle(task.title || sessionName);
     setActiveTaskMode(requestedMode || '');
-    setTaskModalTab('terminal');
     setTaskTerminalStatus('opening terminal...');
     setIsTaskTerminalOpen(true);
     refreshAll();
@@ -316,9 +313,6 @@ export default function App() {
     await openTaskTerminalWithStateCheck(task, 'terminal');
   }
 
-  async function handleOpenTaskChat(task) {
-    await openTaskTerminalWithStateCheck(task, 'chat');
-  }
 
   async function handleDeleteTask(task) {
     if (!task?.id) return;
@@ -407,7 +401,6 @@ export default function App() {
   }, []);
 
   const currentAgentMode = getAgentModeMeta(agentTerminalMode, adapters);
-  const activeTaskAdapter = adapters.find((item) => item.name === activeTaskMode) || adapters[0] || DEFAULT_ADAPTERS[0];
 
   useEffect(() => {
     const media = window.matchMedia?.('(max-width: 767px)');
@@ -434,25 +427,9 @@ export default function App() {
           >
             {modeBadge(currentAgentMode.name, currentAgentMode.label)}
           </span>
-          <span className="truncate">CCM Agent</span>
+          <span className="truncate">CCM Agent Terminal</span>
         </div>
         <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              onClick={() => setAgentPanelTab('terminal')}
-              className={`ccm-button text-xs px-2 py-0.5 ${agentPanelTab === 'terminal' ? 'ccm-button-accent' : 'ccm-button-soft'}`}
-            >
-              Terminal
-            </button>
-            <button
-              type="button"
-              onClick={() => setAgentPanelTab('chat')}
-              className={`ccm-button text-xs px-2 py-0.5 ${agentPanelTab === 'chat' ? 'ccm-button-accent' : 'ccm-button-soft'}`}
-            >
-              Chat
-            </button>
-          </div>
           <select
             value={agentTerminalMode}
             onChange={(e) => switchMainAgentTerminal(e.target.value)}
@@ -467,23 +444,12 @@ export default function App() {
         </div>
       </div>
       <div className="flex-1 min-h-0">
-        {agentPanelTab === 'terminal' ? (
-          agentTerminalReady && agentTerminalSession && socket ? (
+        {agentTerminalReady && agentTerminalSession && socket ? (
           <Terminal socket={socket} sessionName={agentTerminalSession} isMobile={isMobile} />
         ) : (
           <div className="h-full w-full flex items-center justify-center text-xs" style={{ color: 'var(--text-3)' }}>
             {agentTerminalError || 'Starting agent terminal...'}
           </div>
-          )
-        ) : (
-          <AssistantChatWindow
-            title={`${currentAgentMode.label} Agent Chat`}
-            endpoint={`${API_BASE_URL}/api/agent`}
-            historyEndpoint={`${API_BASE_URL}/api/agent/history`}
-            clearEndpoint={`${API_BASE_URL}/api/agent/history`}
-            placeholder="Ask the CCM agent..."
-            assistantLabel={currentAgentMode.label}
-          />
         )}
       </div>
     </div>
@@ -529,10 +495,10 @@ export default function App() {
                 Tasks
               </button>
               <button
-                onClick={() => setMobilePane('chat')}
-                className={`ccm-button text-xs px-3 py-1.5 ${mobilePane === 'chat' ? 'ccm-button-accent' : 'ccm-button-soft'}`}
+                onClick={() => setMobilePane('agent')}
+                className={`ccm-button text-xs px-3 py-1.5 ${mobilePane === 'agent' ? 'ccm-button-accent' : 'ccm-button-soft'}`}
               >
-                Chat
+                Agent
               </button>
             </div>
             <div className="flex-1 min-h-0">
@@ -547,9 +513,9 @@ export default function App() {
                 />
               )}
               {mobilePane === 'tasks' && (
-                <TaskBoard tasks={tasks} adapters={adapters} onOpenTerminal={handleOpenTask} onOpenChat={handleOpenTaskChat} onStartTask={handleStartTask} onDeleteTask={handleDeleteTask} onCreateTask={handleCreateTask} mobile />
+                <TaskBoard tasks={tasks} adapters={adapters} onOpenTerminal={handleOpenTask} onStartTask={handleStartTask} onDeleteTask={handleDeleteTask} onCreateTask={handleCreateTask} mobile />
               )}
-              {mobilePane === 'chat' && mainChatPanel}
+              {mobilePane === 'agent' && mainChatPanel}
             </div>
           </div>
         ) : (
@@ -562,7 +528,7 @@ export default function App() {
               onUpdateProject={handleUpdateProject}
             />
             <div className="flex flex-col flex-1 min-w-0 min-h-0">
-              <TaskBoard tasks={tasks} adapters={adapters} onOpenTerminal={handleOpenTask} onOpenChat={handleOpenTaskChat} onStartTask={handleStartTask} onDeleteTask={handleDeleteTask} onCreateTask={handleCreateTask} />
+              <TaskBoard tasks={tasks} adapters={adapters} onOpenTerminal={handleOpenTask} onStartTask={handleStartTask} onDeleteTask={handleDeleteTask} onCreateTask={handleCreateTask} />
               {mainChatPanel}
             </div>
           </>
@@ -590,22 +556,6 @@ export default function App() {
                   {taskTerminalStatus}
                 </span>
               ) : null}
-              <div className="ml-auto flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => setTaskModalTab('terminal')}
-                  className={`ccm-button text-xs px-3 py-1.5 ${taskModalTab === 'terminal' ? 'ccm-button-accent' : 'ccm-button-soft'}`}
-                >
-                  Terminal
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setTaskModalTab('chat')}
-                  className={`ccm-button text-xs px-3 py-1.5 ${taskModalTab === 'chat' ? 'ccm-button-accent' : 'ccm-button-soft'}`}
-                >
-                  Chat
-                </button>
-              </div>
               <button
                 onClick={closeTaskTerminalModal}
                 className="ccm-button ccm-button-soft text-xs px-3 py-1.5"
@@ -615,25 +565,14 @@ export default function App() {
             </div>
 
             <div className="flex-1 min-h-0">
-              {taskModalTab === 'terminal' ? (
-                <Terminal
-                  socket={socket}
-                  sessionName={activeSession}
-                  forceRedrawOnAttach={activeTaskMode !== 'codex'}
-                  onStatusChange={setTaskTerminalStatus}
-                  onFatalError={handleTaskTerminalFatalError}
-                  isMobile={isMobile}
-                />
-              ) : (
-                <AssistantChatWindow
-                  title={`${activeTaskTitle || 'Task'} Chat`}
-                  endpoint={`${API_BASE_URL}/api/tasks/${encodeURIComponent(activeTaskId)}/chat`}
-                  historyEndpoint={`${API_BASE_URL}/api/tasks/${encodeURIComponent(activeTaskId)}/chat/history`}
-                  clearEndpoint={`${API_BASE_URL}/api/tasks/${encodeURIComponent(activeTaskId)}/chat/history`}
-                  placeholder="Ask about this task..."
-                  assistantLabel={activeTaskAdapter.label || 'Task'}
-                />
-              )}
+              <Terminal
+                socket={socket}
+                sessionName={activeSession}
+                forceRedrawOnAttach={activeTaskMode !== 'codex'}
+                onStatusChange={setTaskTerminalStatus}
+                onFatalError={handleTaskTerminalFatalError}
+                isMobile={isMobile}
+              />
             </div>
           </div>
         </div>
