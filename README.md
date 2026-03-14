@@ -1,120 +1,85 @@
 # Claude Code Manager
 
-Web-based management interface for running multiple Claude Code sessions in parallel. Uses tmux as middleware so you can interact with Claude Code from both the browser (xterm.js) and native terminals (iTerm2/Warp).
+Web-based management interface for running multiple Claude Code / Codex sessions in parallel. Browser-based terminal (xterm.js) with real-time I/O, task-scoped chat, and session recovery.
 
 ## Architecture
 
+```mermaid
+graph TB
+    subgraph Browser["Browser (React)"]
+        PL[ProjectList]
+        TB[TaskBoard]
+        TM["Terminal (xterm.js)"]
+        CW[AssistantChatWindow]
+    end
+
+    subgraph Server["Express Server :3000"]
+        API[REST API]
+        SIO[socket.io]
+        SSE[SSE Stream]
+        PTY[PTY Manager<br/>node-pty]
+        CR[Chat Runtime]
+        DB[(SQLite)]
+        AD[Adapter System]
+    end
+
+    subgraph CLI["CLI Processes"]
+        CC[Claude CLI]
+        CX[Codex CLI]
+    end
+
+    SS["Static Server :8080"]
+
+    PL & TB -->|REST| API
+    TM <-->|WebSocket| SIO
+    CW -->|SSE| SSE
+
+    API --> DB
+    SIO <--> PTY
+    SSE --> CR
+    CR --> AD
+    PTY --> AD
+    AD --> CC & CX
+
+    SS -->|serves| Browser
 ```
-Browser (React + xterm.js)
-    ↕ socket.io
-Static Server (port 8080) | API Server (port 3000)
-                          ↕ node-pty
-                      PTY sessions (one per task)
-                          ↕
-                  Claude Code / Ralph autonomous loop
-```
 
-- **Frontend/Backend Separation**: Static files served independently from API server
-- **SQLite** as primary database for fast reads/writes
-- **Notion** as async sync target (optional, non-blocking)
-- **PTY sessions** decouple Claude Code processes from the web server — sessions survive server restarts
-- **claude-workflow** auto-initialized in each worktree on task start
-
-## Features
-
-- Manage multiple projects and tasks from a single dashboard
-- Start Claude Code in interactive mode or Ralph autonomous loop mode
-- Real-time terminal in browser via xterm.js
-- Git worktree support for parallel feature development
-- PROGRESS.md file watching with Notion sync
-- Session recovery on server restart
-- One-click deploy to remote server
-- **Frontend stays available during API server restarts** (PM2 zero-downtime)
+Three communication channels: REST (CRUD), WebSocket (terminal I/O), SSE (chat streaming). See [docs/architecture.md](docs/architecture.md) for detailed diagrams.
 
 ## Quick Start
 
 ```bash
-# Install dependencies
-npm install
-cd client && npm install && cd ..
+# Install
+npm install && cd client && npm install && cd ..
 
-# Configure environment
-cp .env.example .env
-# Edit .env with your settings
+# Configure
+cp .env.example .env  # Edit with your settings
 
 # Development
-cd client && npm run dev &   # Frontend dev server on :5173 (with proxy)
-npm run dev                   # API server on :3000
+cd client && npm run dev &   # Frontend :5173 (with proxy)
+npm run dev                   # API :3000
 
-# Production (using PM2)
-npm run build                 # Build frontend
-pm2 start server/index.js --name claude-manager-api
-pm2 start static-server.js --name claude-manager-static
-pm2 save
-
-# UI mobile guard (optional, in another terminal)
-npm run ui:mobile:watch
-
-# Production build
+# Production
 npm run build
-npm run dev
+pm2 start server/index.js --name ccm-api
+pm2 start static-server.js --name ccm-static
 ```
 
 ## Environment Variables
 
-| Variable | Description |
-|----------|-------------|
-| `PORT` | API server port (default: 3000) |
-| `STATIC_PORT` | Static server port (default: 8080) |
-| `FRONTEND_URL` | Frontend URL for CORS (default: http://localhost:8080) |
-| `ACCESS_TOKEN` | Bearer token for API auth (optional) |
-| `NOTION_TOKEN` | Notion integration token (optional) |
-| `NOTION_PROJECTS_DB` | Notion Projects database ID |
-| `NOTION_TASKS_DB` | Notion Tasks database ID |
-| `WORKFLOW_DIR` | Path to claude-workflow (default: `~/Documents/claude-workflow`) |
-
-## Notion Setup (Optional)
-
-Create two databases in Notion:
-
-**Projects Database** — properties:
-- Name (title), Repo Path (text), SSH Host (text), Status (select: active/archived)
-
-**Tasks Database** — properties:
-- Title (title), Status (select: pending/in_progress/done/interrupted), Project (relation → Projects), Branch (text), Model (select), Mode (select: claude/ralph)
-
-Then create a Notion integration at https://www.notion.so/my-integrations, share both databases with it, and fill in `.env`.
-
-## Deploy to Server
-
-```bash
-# Prerequisites on server: Node.js 18+, tmux, pm2
-# Configure SSH in ~/.ssh/config (e.g. Host tencent)
-
-# Edit deploy.sh with your server alias and path
-chmod +x deploy.sh
-./deploy.sh
-```
-
-## API
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/projects` | List projects |
-| POST | `/api/projects` | Create project |
-| GET | `/api/tasks?projectId=` | List tasks |
-| POST | `/api/tasks` | Create task |
-| POST | `/api/tasks/:id/start` | Start Claude Code session |
-| POST | `/api/tasks/:id/stop` | Stop session |
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `PORT` | API server port | 3000 |
+| `STATIC_PORT` | Static server port | 8080 |
+| `FRONTEND_URL` | Frontend URL for CORS | http://localhost:8080 |
+| `ACCESS_TOKEN` | Bearer token for API auth | — |
+| `NOTION_TOKEN` | Notion integration token | — |
+| `NOTION_PROJECTS_DB` | Notion Projects database ID | — |
+| `NOTION_TASKS_DB` | Notion Tasks database ID | — |
+| `WORKFLOW_DIR` | Path to claude-workflow | ~/Documents/claude-workflow |
 
 ## Tech Stack
 
-- **Server**: Express, socket.io, node-pty, better-sqlite3
-- **Client**: React, xterm.js, Tailwind CSS, Vite
-- **Infra**: tmux, pm2, GitHub webhook auto-deploy
-
-## Mobile UI Adaptation Guard
-
-- `npm run ui:mobile:watch`: watch `client/src` and auto-run mobile checks after UI edits
-- `npm run ui:mobile:check`: one-shot check (`mobile:check` + frontend build)
-- `client/scripts/mobile-check.mjs` scans UI code for mobile risk patterns (fixed large size, `100vh`)
+- Express, socket.io, node-pty, better-sqlite3, chokidar
+- React 18, xterm.js, Tailwind CSS, Vite
+- PM2, SQLite, GitHub webhook auto-deploy
