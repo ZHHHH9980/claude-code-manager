@@ -41,4 +41,6 @@ pm2 restart claude-manager-static --update-env 2>/dev/null || pm2 start static-s
 pm2 save
 REMOTE_SCRIPT
 
-echo "Done! http://43.138.129.193:3000"
+echo "Done!"
+echo "UI:  http://43.138.129.193:8080"
+echo "API: http://43.138.129.193:3000"
