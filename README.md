@@ -93,52 +93,14 @@ pm2 start static-server.js --name claude-manager-static
 
 ## Deployment
 
-Production is remote-only. This project does not treat the local machine as the production runtime; the live service runs on the remote host configured in [`deploy.sh`](./deploy.sh).
+Production deploys are remote-only and go through `./deploy.sh` after pushing to `origin/main`.
 
-The deploy flow is:
+Detailed reference:
 
-```bash
-git add ...
-git commit -m "your change"
-git push origin main
-./deploy.sh
-```
+- [`DEPLOYMENT.md`](./DEPLOYMENT.md)
 
-Important details:
+## Configuration
 
-- `deploy.sh` SSHes to the remote server and deploys from the remote repo at `/opt/claude-code-manager`.
-- The script runs `git fetch origin` and `git reset --hard origin/main` on the remote host.
-- That means uncommitted local changes are never deployed.
-- If a change is not pushed to `origin/main`, `deploy.sh` will not pick it up.
-- Backend dependency changes trigger `npm install` and `npm rebuild node-pty --build-from-source` on the server.
-- The script always rebuilds `client/` and restarts `claude-manager-static`; it restarts `claude-manager-api` when non-frontend files changed.
+Environment variables, runtime notes, and stack summary live here:
 
-Recommended release routine:
-
-1. Run targeted tests locally before pushing.
-2. Push the exact commit you want on `main`.
-3. Run `./deploy.sh`.
-4. Smoke test the remote UI (`:8080`) and API (`:3000`) after deploy.
-
-## Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `PORT` | API server port | `3000` |
-| `STATIC_PORT` | Static server port | `8080` |
-| `FRONTEND_URL` | Allowed frontend origins for CORS | local/default allows localhost-style origins |
-| `ACCESS_TOKEN` | Optional bearer token for API auth | unset |
-| `DB_PATH` | SQLite database path | `data/manager.db` |
-| `WORKFLOW_DIR` | Path to `claude-workflow` | `~/Documents/claude-workflow` |
-| `TASK_USER` | User to run PTY tasks as when service runs as root | current service user |
-| `NOTION_TOKEN` | Notion integration token | unset |
-| `NOTION_PROJECTS_DB` | Notion Projects database ID | unset |
-| `NOTION_TASKS_DB` | Notion Tasks database ID | unset |
-
-## Tech Stack
-
-- Backend: Express, socket.io, node-pty, better-sqlite3, chokidar
-- Frontend: React 18, xterm.js, Tailwind CSS, Vite
-- Streaming: WebSocket and SSE
-- Runtime: Claude CLI, Codex CLI, PM2
-- Persistence: SQLite and on-disk PTY buffers
+- [`CONFIGURATION.md`](./CONFIGURATION.md)

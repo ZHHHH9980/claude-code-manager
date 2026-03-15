@@ -558,7 +558,7 @@ export default function App() {
               ) : null}
               <button
                 onClick={closeTaskTerminalModal}
-                className="ccm-button ccm-button-soft text-xs px-3 py-1.5"
+                className="ml-auto shrink-0 ccm-button ccm-button-soft text-xs px-3 py-1.5"
               >
                 Close
               </button>
