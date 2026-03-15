@@ -13,6 +13,22 @@ const { syncProjectToNotion, syncTaskToNotion } = require('./notion-sync');
 const ptyManager = require('./pty-manager');
 const { TaskChatRuntimeManager } = require('./task-chat-runtime');
 const { buildClaudeEnv } = require('./claude-env');
+const {
+  normalizeAdapterModel,
+  isCommandAvailable,
+  buildProjectContextEnvExports,
+  launchAdapterInSession,
+} = require('./adapter-launch');
+const { resolveTaskWorkingDirectory, syncProjectInstructionFiles } = require('./project-context');
+const {
+  buildTaskScopedPrompt,
+  buildTaskSessionPrompt,
+  isTaskStatusQuery,
+  buildTaskStatusReply,
+} = require('./task-chat-helpers');
+const { createTaskProcessService } = require('./task-process');
+const { registerTerminalHttpRoutes } = require('./terminal-http-routes');
+const { normalizeSessionName } = require('./terminal-http-helpers');
 const { watchProgress, unwatchProgress } = require('./file-watcher');
 const { resolveAdapter, listAdapters } = require('./adapters');
 
@@ -43,13 +59,6 @@ function isAllowedOrigin(origin) {
   return allowedOriginSet.has(origin);
 }
 
-function normalizeAdapterModel(adapter, model) {
-  const adapterName = String(adapter?.name || '').trim().toLowerCase();
-  const rawModel = String(model || '').trim();
-  if (!rawModel) return adapter?.defaultModel || '';
-  return MODEL_ALIASES[adapterName]?.[rawModel] || rawModel;
-}
-
 const corsOptions = {
   origin(origin, callback) {
     if (isAllowedOrigin(origin)) return callback(null, true);
@@ -71,6 +80,23 @@ const io = new Server(server, {
 });
 const taskChatRuntimeManager = new TaskChatRuntimeManager({
   logMetric: (event, payload) => logChatMetric(event, payload),
+});
+const taskProcessService = createTaskProcessService({
+  db,
+  fs,
+  ptyManager,
+  watchProgress,
+  syncTaskToNotion,
+  resolveAdapter,
+  resolveTaskWorkingDirectory,
+  syncProjectInstructionFiles,
+  normalizeAdapterModel,
+  buildProjectContextEnvExports,
+  launchAdapterInSession,
+  isCommandAvailable,
+  modelAliases: MODEL_ALIASES,
+  workflowDir: WORKFLOW_DIR,
+  sessionsDir: SESSIONS_DIR,
 });
 
 app.use(cors(corsOptions));
@@ -151,73 +177,16 @@ app.post('/api/tasks', (req, res) => {
 app.post('/api/tasks/:id/start', (req, res) => {
   const { id } = req.params;
   const { worktreePath, branch, model, mode } = req.body;
-  const resolved = resolveAdapter(mode);
-  const adapter = resolved.adapter;
-  if (resolved.usedLegacyAlias) {
-    console.warn(`[adapter] legacy mode "${resolved.requestedName}" requested, fallback to "${resolved.resolvedName}"`);
-  }
-  const finalModel = normalizeAdapterModel(adapter, model);
-  const safeTaskId = String(id).replace(/[^a-zA-Z0-9_-]/g, '').slice(-24) || 'task';
-  const sessionName = `claude-task-${safeTaskId}`;
-
-  if (!isCommandAvailable(adapter.cli)) {
-    return res.status(400).json({
-      sessionName,
-      ptyOk: false,
-      mode: adapter.name,
-      model: finalModel,
-      error: `CLI not found: ${adapter.cli}`,
-    });
-  }
-
-  const task = db.updateTask(id, {
-    status: 'in_progress',
-    worktreePath,
-    ptySession: sessionName,
-    mode: adapter.name,
-    model: finalModel,
+  const result = taskProcessService.startTaskSession(id, {
+    requestedPath: worktreePath,
+    branch,
+    model,
+    mode,
   });
-  const project = task?.project_id ? db.getProject(task.project_id) : null;
-  const sessionEnvExports = buildProjectContextEnvExports(task, project);
-  syncTaskToNotion(task);
-
-  // Initialize claude-workflow in worktree
-  try {
-    execSync(`${WORKFLOW_DIR}/install.sh init`, { cwd: worktreePath, stdio: 'ignore' });
-  } catch (e) {
-    console.log('Workflow init skipped or already done');
+  if (result.httpStatus) {
+    return res.status(result.httpStatus).json(result.body);
   }
-
-  let ptyOk = true;
-  let error = null;
-  try {
-    const existed = ptyManager.sessionExists(sessionName);
-    if (existed) {
-      ptyManager.killSession(sessionName);
-    }
-    ptyManager.ensureSession(sessionName, worktreePath);
-    setTimeout(() => {
-      try {
-        launchAdapterInSession(sessionName, {
-          adapter,
-          model: finalModel,
-          context: `start task ${id}`,
-          sessionEnvExports,
-        });
-      } catch (err) {
-        ptyOk = false;
-        error = err?.message || String(err);
-        console.warn(`pty sendInput failed for task ${id}:`, err?.message || err);
-      }
-    }, 500);
-  } catch (err) {
-    ptyOk = false;
-    error = err?.message || String(err);
-    console.warn(`pty unavailable for task ${id}:`, err?.message || err);
-  }
-
-  watchProgress(worktreePath, id);
-  res.json({ sessionName, ptyOk, mode: adapter.name, model: finalModel, error });
+  res.json(result.body);
 });
 
 app.post('/api/tasks/:id/stop', (req, res) => {
@@ -253,455 +222,11 @@ app.delete('/api/tasks/:id', (req, res) => {
   res.json({ ok: true, deleted: id });
 });
 
-function normalizeSessionName(raw) {
-  const value = String(raw || '').trim();
-  if (!value) return '';
-  if (!/^[a-zA-Z0-9._:-]+$/.test(value)) return '';
-  return value;
-}
-
-function getTerminalState(sessionName) {
-  const exists = ptyManager.sessionExists(sessionName);
-  const entry = exists ? ptyManager.sessions.get(sessionName) : null;
-  const tasks = db.getTasks();
-  const owningTask = tasks.find((task) => task?.pty_session === sessionName) || null;
-  const owningRunningTask = tasks.find(
-    (task) => task?.pty_session === sessionName && task?.status === 'in_progress'
-  ) || null;
-  const output = exists ? ptyManager.getBufferedOutput(sessionName) : '';
-
-  return {
-    sessionName,
-    exists,
-    state: exists ? 'attached' : 'missing',
-    code: exists ? 'ok' : 'session_not_found',
-    attachedClients: exists ? Number(entry?.clients?.size || 0) : 0,
-    bufferBytes: output.length,
-    taskId: owningTask?.id || null,
-    taskStatus: owningTask?.status || null,
-    runningTaskId: owningRunningTask?.id || null,
-    recoverable: exists,
-  };
-}
-
-function sendTerminalJSONError(res, httpStatus, code, message, extra = {}) {
-  res.status(httpStatus).json({
-    error: message,
-    code,
-    ...extra,
-  });
-}
-
-function emitSSE(res, payload) {
-  if (res.writableEnded) return;
-  res.write(`data: ${JSON.stringify(payload)}\n\n`);
-}
-
-function buildTerminalEmbedPage(sessionName, accessToken) {
-  const encodedSession = encodeURIComponent(sessionName);
-  const tokenQuery = accessToken ? `?access_token=${encodeURIComponent(accessToken)}` : '';
-  const readBaseUrl = `/api/terminal/${encodedSession}/read${tokenQuery}`;
-  const inputUrl = `/api/terminal/${encodedSession}/input${tokenQuery}`;
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>CCM Terminal Web</title>
-  <style>
-    :root { color-scheme: dark; }
-    body {
-      margin: 0;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      background: #0f1115;
-      color: #e8eaf0;
-      display: flex;
-      flex-direction: column;
-      height: 100vh;
-    }
-    .topbar {
-      padding: 10px 12px;
-      border-bottom: 1px solid #2a2f3b;
-      color: #c9d0df;
-      font-size: 12px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
-    #output {
-      flex: 1;
-      overflow-y: auto;
-      white-space: pre-wrap;
-      word-break: break-word;
-      padding: 10px 12px;
-      line-height: 1.3;
-      font-size: 12px;
-    }
-    .status {
-      color: #a0a9bc;
-      font-size: 11px;
-      white-space: nowrap;
-    }
-    .bar {
-      border-top: 1px solid #2a2f3b;
-      display: flex;
-      gap: 8px;
-      padding: 8px;
-      background: #131722;
-    }
-    #cmd {
-      flex: 1;
-      border: 1px solid #3a4458;
-      background: #0f1115;
-      color: #e8eaf0;
-      border-radius: 8px;
-      padding: 10px;
-      font: inherit;
-      min-width: 0;
-    }
-    #send {
-      border: 1px solid #4a556f;
-      background: #1b2233;
-      color: #f3f5fb;
-      border-radius: 8px;
-      padding: 0 14px;
-      font-size: 12px;
-    }
-  </style>
-</head>
-<body>
-  <div class="topbar">
-    <span>Web Terminal • ${sessionName}</span>
-    <span id="status" class="status">connecting...</span>
-  </div>
-  <pre id="output"></pre>
-  <div class="bar">
-    <input id="cmd" placeholder="Type command and press Enter" autocomplete="off" autocapitalize="off" />
-    <button id="send">Send</button>
-  </div>
-  <script>
-    const statusEl = document.getElementById('status');
-    const outputEl = document.getElementById('output');
-    const cmdEl = document.getElementById('cmd');
-    const sendEl = document.getElementById('send');
-    const inputUrl = ${JSON.stringify(inputUrl)};
-    let readOffset = 0;
-    let pollTimer = null;
-    let pendingPoll = false;
-    let stopped = false;
-
-    function setStatus(text) {
-      statusEl.textContent = text;
-    }
-
-    function stopPolling(statusText, logText) {
-      stopped = true;
-      if (pollTimer) clearTimeout(pollTimer);
-      if (statusText) setStatus(statusText);
-      if (logText) append('\\n[' + logText + ']\\n');
-    }
-
-    async function postJSON(url, payload) {
-      return fetch(url, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-    }
-
-    function sanitize(text) {
-      return String(text || '')
-        .replace(/\\r\\n/g, '\n')
-        .replace(/\\r/g, '\n')
-        .replace(/\\x1B\\[[0-9;?]*[ -/]*[@-~]/g, '')
-        .replace(/\\x1B\\][^\\x07]*(\\x07|\\x1B\\\\)/g, '')
-        .replace(/[\\x00-\\x08\\x0B-\\x1F\\x7F]/g, '');
-    }
-
-    function append(text) {
-      const clean = sanitize(text);
-      if (!clean) return;
-      outputEl.textContent += clean;
-      if (outputEl.textContent.length > 200000) {
-        outputEl.textContent = outputEl.textContent.slice(-150000);
-      }
-      outputEl.scrollTop = outputEl.scrollHeight;
-    }
-
-    function buildReadUrl(from, tail) {
-      const base = ${JSON.stringify(readBaseUrl)};
-      const params = [];
-      if (Number.isFinite(from) && from >= 0) params.push('from=' + encodeURIComponent(String(from)));
-      if (Number.isFinite(tail) && tail > 0) params.push('tail=' + encodeURIComponent(String(tail)));
-      if (params.length === 0) return base;
-      return base + (base.includes('?') ? '&' : '?') + params.join('&');
-    }
-
-    async function pollRead() {
-      if (stopped) return;
-      if (pendingPoll) return;
-      pendingPoll = true;
-      try {
-        const resp = await fetch(buildReadUrl(readOffset, null), { cache: 'no-store' });
-        if (!resp.ok) {
-          if (resp.status === 401) {
-            stopPolling('auth failed', 'unauthorized: check ACCESS_TOKEN');
-            return;
-          }
-          if (resp.status === 404) {
-            stopPolling('session missing', 'session not found; restart the task terminal');
-            return;
-          }
-          throw new Error('HTTP ' + resp.status);
-        }
-        const payload = await resp.json();
-        if (typeof payload.next === 'number') readOffset = payload.next;
-        if (typeof payload.chunk === 'string' && payload.chunk.length > 0) append(payload.chunk);
-        setStatus('connected');
-      } catch (err) {
-        append('\\n[read error] ' + (err && err.message ? err.message : 'read failed') + '\\n');
-        setStatus('reconnecting...');
-      } finally {
-        pendingPoll = false;
-        if (!stopped) pollTimer = setTimeout(pollRead, 700);
-      }
-    }
-
-    async function bootstrapRead() {
-      try {
-        const resp = await fetch(buildReadUrl(null, 40000), { cache: 'no-store' });
-        if (!resp.ok) {
-          if (resp.status === 401) {
-            stopPolling('auth failed', 'unauthorized: check ACCESS_TOKEN');
-            return;
-          }
-          if (resp.status === 404) {
-            stopPolling('session missing', 'session not found; restart the task terminal');
-            return;
-          }
-          throw new Error('HTTP ' + resp.status);
-        }
-        const payload = await resp.json();
-        if (typeof payload.next === 'number') readOffset = payload.next;
-        if (typeof payload.chunk === 'string' && payload.chunk.length > 0) append(payload.chunk);
-        setStatus('connected');
-      } catch (err) {
-        append('\\n[bootstrap error] ' + (err && err.message ? err.message : 'bootstrap failed') + '\\n');
-        setStatus('reconnecting...');
-      }
-      if (!stopped) pollTimer = setTimeout(pollRead, 700);
-    }
-
-    async function sendCurrentInput() {
-      if (stopped) {
-        append('\\n[terminal unavailable; reopen task terminal]\\n');
-        return;
-      }
-      const value = cmdEl.value || '';
-      cmdEl.value = '';
-      if (!value.trim()) return;
-      append('\\n> ' + value + '\\n');
-      try {
-        const resp = await postJSON(inputUrl, { data: value + '\\n' });
-        if (!resp.ok) {
-          if (resp.status === 401) {
-            stopPolling('auth failed', 'input rejected: unauthorized');
-            return;
-          }
-          if (resp.status === 404) {
-            stopPolling('session missing', 'input rejected: session not found');
-            return;
-          }
-          throw new Error('HTTP ' + resp.status);
-        }
-      } catch {
-        append('\\n[input failed]\\n');
-      }
-    }
-
-    sendEl.addEventListener('click', sendCurrentInput);
-    cmdEl.addEventListener('keydown', (event) => {
-      if (event.key !== 'Enter') return;
-      event.preventDefault();
-      sendCurrentInput();
-    });
-
-    window.addEventListener('beforeunload', () => {
-      if (pollTimer) clearTimeout(pollTimer);
-    });
-
-    bootstrapRead();
-  </script>
-</body>
-</html>`;
-}
-
-app.post('/api/tasks/:id/terminal/session', (req, res) => {
-  const { id } = req.params;
-  const task = db.getTask(id);
-  if (!task) return res.status(404).json({ error: 'task not found' });
-  if (task.status !== 'in_progress') {
-    return res.status(400).json({ error: 'task is not running' });
-  }
-  const runtime = ensureTaskProcess(task, { ensurePty: true });
-  if (!runtime) {
-    return res.status(400).json({ error: 'task worktree/repo path missing' });
-  }
-  res.json({
-    sessionName: runtime.sessionName,
-    ready: ptyManager.sessionExists(runtime.sessionName),
-    mode: task.mode || null,
-  });
-});
-
-app.get('/api/terminal/:sessionName/state', (req, res) => {
-  const sessionName = normalizeSessionName(req.params.sessionName);
-  if (!sessionName) {
-    return sendTerminalJSONError(res, 400, 'invalid_session_name', 'invalid session name');
-  }
-  res.json(getTerminalState(sessionName));
-});
-
-app.get('/api/terminal/:sessionName/stream', (req, res) => {
-  const sessionName = normalizeSessionName(req.params.sessionName);
-  if (!sessionName) {
-    return sendTerminalJSONError(res, 400, 'invalid_session_name', 'invalid session name');
-  }
-  if (!ptyManager.sessionExists(sessionName)) {
-    return sendTerminalJSONError(
-      res,
-      404,
-      'session_not_found',
-      'session not found',
-      { terminal: getTerminalState(sessionName) }
-    );
-  }
-  const replayRaw = String(req.query?.replay ?? '').trim().toLowerCase();
-  const replayEnabled = !(replayRaw === '0' || replayRaw === 'false' || replayRaw === 'no');
-  const replayBytesRaw = Number(req.query?.replay_bytes);
-  const replayBytes = Number.isFinite(replayBytesRaw)
-    ? Math.max(1024, Math.min(200000, Math.floor(replayBytesRaw)))
-    : 40000;
-
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache, no-transform');
-  res.setHeader('Connection', 'keep-alive');
-  if (typeof res.flushHeaders === 'function') res.flushHeaders();
-
-  emitSSE(res, { type: 'ready', sessionName });
-  let replay = replayEnabled ? ptyManager.getBufferedOutput(sessionName) : '';
-  if (replay && replay.length > replayBytes) {
-    replay = replay.slice(-replayBytes);
-  }
-  if (replay) {
-    emitSSE(res, { type: 'output', chunk: replay, replay: true });
-  }
-
-  const unsubscribe = ptyManager.subscribeOutput(sessionName, (chunk) => {
-    emitSSE(res, { type: 'output', chunk });
-  });
-
-  const heartbeat = setInterval(() => {
-    if (res.writableEnded) return;
-    res.write(': ping\n\n');
-    if (!ptyManager.sessionExists(sessionName)) {
-      emitSSE(res, { type: 'done', message: 'session ended' });
-      cleanup();
-      res.end();
-    }
-  }, 15000);
-
-  const cleanup = () => {
-    clearInterval(heartbeat);
-    unsubscribe();
-  };
-
-  req.on('close', cleanup);
-});
-
-app.post('/api/terminal/:sessionName/input', (req, res) => {
-  const sessionName = normalizeSessionName(req.params.sessionName);
-  if (!sessionName) {
-    return sendTerminalJSONError(res, 400, 'invalid_session_name', 'invalid session name');
-  }
-  if (!ptyManager.sessionExists(sessionName)) {
-    return sendTerminalJSONError(
-      res,
-      404,
-      'session_not_found',
-      'session not found',
-      { terminal: getTerminalState(sessionName) }
-    );
-  }
-  const data = typeof req.body?.data === 'string' ? req.body.data : '';
-  if (!data) {
-    return sendTerminalJSONError(res, 400, 'input_required', 'input data required');
-  }
-  ptyManager.sendInput(sessionName, data);
-  res.json({ ok: true });
-});
-
-app.post('/api/terminal/:sessionName/resize', (req, res) => {
-  const sessionName = normalizeSessionName(req.params.sessionName);
-  if (!sessionName) {
-    return sendTerminalJSONError(res, 400, 'invalid_session_name', 'invalid session name');
-  }
-  if (!ptyManager.sessionExists(sessionName)) {
-    return sendTerminalJSONError(
-      res,
-      404,
-      'session_not_found',
-      'session not found',
-      { terminal: getTerminalState(sessionName) }
-    );
-  }
-  const cols = Math.max(40, Math.min(400, Number(req.body?.cols) || 120));
-  const rows = Math.max(10, Math.min(200, Number(req.body?.rows) || 30));
-  ptyManager.resizeSession(sessionName, cols, rows);
-  res.json({ ok: true, cols, rows });
-});
-
-app.get('/api/terminal/:sessionName/read', (req, res) => {
-  const sessionName = normalizeSessionName(req.params.sessionName);
-  if (!sessionName) {
-    return sendTerminalJSONError(res, 400, 'invalid_session_name', 'invalid session name');
-  }
-  if (!ptyManager.sessionExists(sessionName)) {
-    return sendTerminalJSONError(
-      res,
-      404,
-      'session_not_found',
-      'session not found',
-      { terminal: getTerminalState(sessionName) }
-    );
-  }
-  const output = ptyManager.getBufferedOutput(sessionName) || '';
-  const rawFrom = Number(req.query?.from);
-  const hasFrom = Number.isFinite(rawFrom) && rawFrom >= 0;
-  const rawTail = Number(req.query?.tail);
-  const tail = Number.isFinite(rawTail)
-    ? Math.max(1024, Math.min(200000, Math.floor(rawTail)))
-    : 0;
-  let from = hasFrom ? Math.floor(rawFrom) : 0;
-  if (!hasFrom && tail > 0 && output.length > tail) {
-    from = output.length - tail;
-  }
-  const safeFrom = Math.min(from, output.length);
-  res.json({
-    from: safeFrom,
-    next: output.length,
-    chunk: output.slice(safeFrom),
-  });
-});
-
-app.get('/api/terminal/:sessionName/embed', (req, res) => {
-  const sessionName = normalizeSessionName(req.params.sessionName);
-  if (!sessionName) return res.status(400).type('text/plain').send('invalid session name');
-  if (!ptyManager.sessionExists(sessionName)) {
-    return res.status(404).type('text/plain').send('session not found');
-  }
-  const accessToken = typeof req.query?.access_token === 'string' ? req.query.access_token : '';
-  res.type('html').send(buildTerminalEmbedPage(sessionName, accessToken));
+registerTerminalHttpRoutes({
+  app,
+  db,
+  ptyManager,
+  ensureTaskProcess,
 });
 
 app.get('/api/tasks/:id/chat/history', (req, res) => {
@@ -725,278 +250,12 @@ function logChatMetric(event, payload) {
   console.log(`[chat-metric] ${JSON.stringify({ event, ...payload })}`);
 }
 
-function isCommandAvailable(cmd) {
-  const safe = String(cmd || '').trim();
-  if (!safe || !/^[a-zA-Z0-9._-]+$/.test(safe)) return false;
-  try {
-    execSync(`bash -lc "command -v ${safe}"`, { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function buildAdapterLaunchCommand(adapter, model) {
-  const args = [];
-  const finalModel = normalizeAdapterModel(adapter, model);
-  if (finalModel) args.push('--model', finalModel);
-  if (Array.isArray(adapter?.defaultArgs) && adapter.defaultArgs.length > 0) {
-    args.push(...adapter.defaultArgs);
-  }
-  return `${adapter?.cli || 'claude'} ${args.join(' ')}`.trim();
-}
-
-function shellQuote(value) {
-  const raw = String(value ?? '');
-  return `'${raw.replace(/'/g, `'\"'\"'`)}'`;
-}
-
-function buildAdapterEnvExports(adapter) {
-  const exports = [];
-  if (adapter?.cli === 'claude') {
-    const env = buildClaudeEnv();
-    exports.push(
-      ['ANTHROPIC_BASE_URL', env.ANTHROPIC_BASE_URL],
-      ['ANTHROPIC_AUTH_TOKEN', env.ANTHROPIC_AUTH_TOKEN],
-    );
-  }
-  const lines = exports
-    .filter(([, val]) => typeof val === 'string' && val.trim())
-    .map(([key, val]) => `export ${key}=${shellQuote(val)}`);
-  if (adapter?.cli === 'claude') {
-    lines.push('unset ANTHROPIC_API_KEY APIKEY API_KEY');
-  }
-  return lines.join('; ');
-}
-
-function buildProjectContextEnvExports(task, project) {
-  const exports = [
-    ['CCM_TASK_ID', task?.id || ''],
-    ['CCM_TASK_TITLE', task?.title || ''],
-    ['CCM_TASK_BRANCH', task?.branch || ''],
-    ['CCM_PROJECT_ID', project?.id || task?.project_id || ''],
-    ['CCM_PROJECT_NAME', project?.name || ''],
-    ['CCM_PROJECT_REPO_PATH', project?.repo_path || task?.worktree_path || ''],
-    ['CCM_PROJECT_GITHUB_REPO', project?.github_repo || ''],
-  ];
-  return exports
-    .filter(([, val]) => typeof val === 'string' && val.trim())
-    .map(([key, val]) => `export ${key}=${shellQuote(val)}`)
-    .join('; ');
-}
-
-function launchAdapterInSession(sessionName, { adapter, model, context, sessionEnvExports }) {
-  const adapterExports = buildAdapterEnvExports(adapter);
-  ptyManager.sendInput(sessionName, 'export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 LC_CTYPE=en_US.UTF-8\n');
-  if (adapterExports) {
-    ptyManager.sendInput(sessionName, `${adapterExports}\n`);
-  }
-  if (sessionEnvExports) {
-    ptyManager.sendInput(sessionName, `${sessionEnvExports}\n`);
-  }
-  ptyManager.sendInput(sessionName, `${buildAdapterLaunchCommand(adapter, model)}\n`);
-  if (adapter?.autoConfirm?.enabled) {
-    const delayMs = Number(adapter?.autoConfirm?.delayMs) || 3000;
-    setTimeout(() => { try { ptyManager.sendInput(sessionName, '\n'); } catch {} }, delayMs);
-  }
-  if (context) {
-    console.log(`launched adapter=${adapter?.name || 'claude'} session=${sessionName} (${context})`);
-  }
-}
-
 function ensureTaskProcess(task, opts = {}) {
-  const { ensurePty = true } = opts;
-  if (!task) return null;
-  const resolved = resolveAdapter(task.mode);
-  const adapter = resolved.adapter;
-  if (resolved.usedLegacyAlias) {
-    console.warn(`[adapter] legacy mode "${resolved.requestedName}" detected, fallback to "${resolved.resolvedName}"`);
-  }
-  const safeTaskId = String(task.id || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(-24) || 'task';
-  const sessionName = task.pty_session || `claude-task-${safeTaskId}`;
-  const finalModel = normalizeAdapterModel(adapter, task.model);
-  let cwd = task.worktree_path;
-  const project = task.project_id ? db.getProject(task.project_id) : null;
-  if (!cwd && task.project_id) {
-    cwd = project?.repo_path;
-  }
-  if (!cwd) return null;
-  const sessionEnvExports = buildProjectContextEnvExports(task, project);
-
-  if (ensurePty) {
-    const existed = ptyManager.sessionExists(sessionName);
-    try {
-      ptyManager.ensureSession(sessionName, cwd || process.env.HOME || '/');
-      if (!existed) {
-        setTimeout(() => {
-          try {
-            if (!isCommandAvailable(adapter.cli)) {
-              console.warn(`task ${task.id} launch skipped: CLI not found: ${adapter.cli}`);
-              return;
-            }
-            launchAdapterInSession(sessionName, {
-              adapter,
-              model: finalModel,
-              context: `ensure task ${task.id}`,
-              sessionEnvExports,
-            });
-          } catch (err) {
-            console.warn(`pty sendInput failed for task ${task.id}:`, err?.message || err);
-          }
-        }, 500);
-      }
-    } catch (err) {
-      console.warn(`pty ensureSession failed for task ${task.id}:`, err?.message || err);
-    }
-  }
-  if (task.pty_session !== sessionName || task.status !== 'in_progress' || task.mode !== adapter.name || task.model !== finalModel) {
-    const updated = db.updateTask(task.id, {
-      ptySession: sessionName,
-      status: 'in_progress',
-      mode: adapter.name,
-      model: finalModel,
-    });
-    syncTaskToNotion(updated);
-  }
-  if (cwd) watchProgress(cwd, task.id);
-  return { sessionName, cwd };
+  return taskProcessService.ensureTaskProcess(task, opts);
 }
 
 function isoNow(ts = Date.now()) {
   return new Date(ts).toISOString();
-}
-
-const TASK_CHAT_HISTORY_LIMIT = 24;
-const TASK_CHAT_HISTORY_TEXT_LIMIT = 120;
-
-function compactText(input, maxLen = TASK_CHAT_HISTORY_TEXT_LIMIT) {
-  const oneLine = String(input || '').replace(/\s+/g, ' ').trim();
-  if (oneLine.length <= maxLen) return oneLine;
-  return `${oneLine.slice(0, maxLen)}...`;
-}
-
-function shouldIncludeHistoryEntry(entry) {
-  const role = entry?.role;
-  const text = String(entry?.text || '').trim();
-  if (!text) return false;
-  if (role !== 'user' && role !== 'assistant') return false;
-  if (text.includes('You are in Task Session Chat. Strict scope rules:')) return false;
-  if (text.includes('────────────────────────────────')) return false;
-  return true;
-}
-
-function buildTaskScopedPrompt(task, project, userMessage, history = []) {
-  const normalizedHistory = Array.isArray(history)
-    ? history
-      .filter((entry) => shouldIncludeHistoryEntry(entry))
-      .slice(-TASK_CHAT_HISTORY_LIMIT)
-      .map((entry) => ({
-        role: entry.role === 'assistant' ? 'assistant' : 'user',
-        text: compactText(entry.text),
-      }))
-    : [];
-
-  const historyLines = normalizedHistory.length > 0
-    ? [
-      '',
-      'Conversation history (oldest first):',
-      ...normalizedHistory.map((entry, idx) => `${idx + 1}. [${entry.role}] ${entry.text}`),
-    ]
-    : ['', 'Conversation history: (empty)'];
-
-  const lines = [
-    'You are in Task Session Chat. Strict scope rules:',
-    '1) Only discuss and act on the current task shown below.',
-    '2) Do NOT query/list/summarize other tasks unless the user explicitly asks to compare across tasks.',
-    '3) If user asks progress/status, report only current task progress.',
-    '4) If information is missing for current task, ask a focused follow-up question.',
-    '',
-    'Current task context:',
-    `- task_id: ${task?.id || ''}`,
-    `- title: ${task?.title || ''}`,
-    `- status: ${task?.status || ''}`,
-    `- branch: ${task?.branch || ''}`,
-    `- pty_session: ${task?.pty_session || ''}`,
-    `- project_id: ${task?.project_id || ''}`,
-    `- project_name: ${project?.name || ''}`,
-    `- project_repo_path: ${project?.repo_path || ''}`,
-    `- project_github_repo: ${project?.github_repo || ''}`,
-    ...historyLines,
-    '',
-    'Current user message:',
-    compactText(userMessage, 600),
-  ];
-  return lines.join('\n');
-}
-
-function buildTaskSessionPrompt(task, project, userMessage, bootstrap = false) {
-  const lines = [];
-  if (bootstrap) {
-    lines.push(
-      'You are in Task Session Chat. Strict scope rules:',
-      '1) Only discuss and act on the current task shown below.',
-      '2) Do NOT query/list/summarize other tasks unless explicitly requested.',
-      '3) Keep answers concise and action-oriented.',
-      '',
-      'Current task context:',
-      `- task_id: ${task?.id || ''}`,
-      `- title: ${task?.title || ''}`,
-      `- status: ${task?.status || ''}`,
-      `- branch: ${task?.branch || ''}`,
-      `- project_name: ${project?.name || ''}`,
-      `- project_repo_path: ${project?.repo_path || ''}`,
-      `- project_github_repo: ${project?.github_repo || ''}`,
-      '',
-    );
-  } else {
-    lines.push(
-      `Task scope reminder: task_id=${task?.id || ''}, title="${task?.title || ''}", branch="${task?.branch || ''}", project="${project?.name || ''}", github_repo="${project?.github_repo || ''}".`,
-      'Continue in the same task-scoped conversation context.',
-      '',
-    );
-  }
-  lines.push('Current user message:', compactText(userMessage, 1200));
-  return lines.join('\n');
-}
-
-function isTaskStatusQuery(message) {
-  const text = String(message || '').toLowerCase().trim();
-  if (!text) return false;
-  const patterns = [
-    /进度/,
-    /状态/,
-    /什么进展/,
-    /目前.*(怎么样|如何|进度)/,
-    /还要多久/,
-    /现在.*(干嘛|做什么)/,
-    /\bprogress\b/,
-    /\bstatus\b/,
-    /\bupdate\b/,
-    /\bwhat('?s| is)?\s+the\s+progress\b/,
-  ];
-  return patterns.some((re) => re.test(text));
-}
-
-function buildTaskStatusReply(task, project, hasActiveProcess) {
-  const status = task?.status || 'unknown';
-  const title = task?.title || '(untitled)';
-  const branch = task?.branch || '(none)';
-  const updatedAt = task?.updated_at || task?.created_at || '(unknown)';
-  const projectName = project?.name || '(unknown)';
-  const githubRepo = project?.github_repo || '(not set)';
-  const running = hasActiveProcess ? 'yes' : 'no';
-  return [
-    'Current task progress summary:',
-    `- title: ${title}`,
-    `- status: ${status}`,
-    `- running process attached: ${running}`,
-    `- branch: ${branch}`,
-    `- project: ${projectName}`,
-    `- github repo: ${githubRepo}`,
-    `- last updated: ${updatedAt}`,
-    '',
-    'If you want, I can continue with a concrete next action (for example: integrate ChatWindow, run build, or deploy).',
-  ].join('\n');
 }
 
 function startClaudeStream({ cwd, message, onProcess, scope, taskId = null, sessionId = null, resumeSession = false }, res) {
@@ -1191,7 +450,11 @@ function startAgentTerminalSession(mode = 'claude') {
     if (!existed) {
       setTimeout(() => {
         try {
-          launchAdapterInSession(AGENT_TERMINAL_SESSION, { adapter, model: adapter.defaultModel, context: 'agent terminal' });
+          launchAdapterInSession(
+            AGENT_TERMINAL_SESSION,
+            { adapter, model: adapter.defaultModel, context: 'agent terminal' },
+            { ptyManager, aliases: MODEL_ALIASES },
+          );
         } catch (err) {
           ptyOk = false;
           error = err?.message || String(err);
@@ -1439,57 +702,7 @@ app.post('/api/webhook/github', async (req, res) => {
 
 // Recovery
 function recoverSessions() {
-  const aliveSessions = ptyManager.listAliveSessions();
-  const tasks = db.getTasks();
-  for (const task of tasks) {
-    if (task.status === 'in_progress' && task.pty_session) {
-      if (aliveSessions.includes(task.pty_session)) {
-        ptyManager.attachSession(task.pty_session);
-        if (task.worktree_path) watchProgress(task.worktree_path, task.id);
-        console.log(`Recovered session: ${task.pty_session}`);
-      } else {
-        // Load persisted buffer so the terminal can replay history after restart
-        const bufFile = path.join(SESSIONS_DIR, `${task.pty_session}.buf`);
-        let savedBuffer = '';
-        try { savedBuffer = fs.readFileSync(bufFile, 'utf8'); } catch {}
-
-        try {
-          const entry = ptyManager.ensureSession(task.pty_session, task.worktree_path);
-          if (savedBuffer) {
-            entry.outputBuffer = savedBuffer + '\r\n\x1b[33m[session auto-recovered after server restart]\x1b[0m\r\n';
-          }
-          if (task.worktree_path) watchProgress(task.worktree_path, task.id);
-
-          // Re-launch CC in the new PTY
-          setTimeout(() => {
-            try {
-              const resolved = resolveAdapter(task.mode);
-              const adapter = resolved.adapter;
-              if (resolved.usedLegacyAlias) {
-                console.warn(`[adapter] legacy mode "${resolved.requestedName}" detected during recovery, fallback to "${resolved.resolvedName}"`);
-              }
-              if (!isCommandAvailable(adapter.cli)) {
-                console.warn(`recover task ${task.id} skipped: CLI not found: ${adapter.cli}`);
-                return;
-              }
-              const project = task?.project_id ? db.getProject(task.project_id) : null;
-              launchAdapterInSession(task.pty_session, {
-                adapter,
-                model: task.model || adapter.defaultModel,
-                context: `recover task ${task.id}`,
-                sessionEnvExports: buildProjectContextEnvExports(task, project),
-              });
-            } catch {}
-          }, 500);
-
-          console.log(`Auto-restarted session: ${task.pty_session}`);
-        } catch (err) {
-          db.updateTask(task.id, { status: 'interrupted' });
-          console.log(`Failed to restart session, marked interrupted: ${task.pty_session}`);
-        }
-      }
-    }
-  }
+  taskProcessService.recoverSessions();
 }
 
 // WebSocket

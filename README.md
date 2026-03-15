@@ -91,6 +91,35 @@ pm2 start server/index.js --name claude-manager-api
 pm2 start static-server.js --name claude-manager-static
 ```
 
+## Deployment
+
+Production is remote-only. This project does not treat the local machine as the production runtime; the live service runs on the remote host configured in [`deploy.sh`](./deploy.sh).
+
+The deploy flow is:
+
+```bash
+git add ...
+git commit -m "your change"
+git push origin main
+./deploy.sh
+```
+
+Important details:
+
+- `deploy.sh` SSHes to the remote server and deploys from the remote repo at `/opt/claude-code-manager`.
+- The script runs `git fetch origin` and `git reset --hard origin/main` on the remote host.
+- That means uncommitted local changes are never deployed.
+- If a change is not pushed to `origin/main`, `deploy.sh` will not pick it up.
+- Backend dependency changes trigger `npm install` and `npm rebuild node-pty --build-from-source` on the server.
+- The script always rebuilds `client/` and restarts `claude-manager-static`; it restarts `claude-manager-api` when non-frontend files changed.
+
+Recommended release routine:
+
+1. Run targeted tests locally before pushing.
+2. Push the exact commit you want on `main`.
+3. Run `./deploy.sh`.
+4. Smoke test the remote UI (`:8080`) and API (`:3000`) after deploy.
+
 ## Environment Variables
 
 | Variable | Description | Default |
