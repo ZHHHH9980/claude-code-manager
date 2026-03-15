@@ -140,16 +140,14 @@ CLI Processes
 
 ### 1. Express + socket.io 入口
 
-`server/index.js` 负责：
+`server/index.js` 现在主要负责装配这些模块：
 
 - CORS 与可选 Bearer Token 鉴权
-- REST API
-- socket.io 终端事件
-- 任务启动 / 停止
-- Agent Terminal 启动 / 停止
-- Agent / task chat SSE
-- 自部署 webhook
+- REST / SSE / socket.io 模块注册
+- 项目与任务基础路由装配
+- adapter 列表接口
 - 启动时恢复任务会话
+- 进程关闭时持久化 PTY buffer
 
 ### 2. PTY Manager
 
@@ -370,16 +368,3 @@ PTY 启动逻辑支持：
 - adapter 驱动的 Claude / Codex 终端
 - SQLite + PTY buffer 恢复
 - `ProjectList / TaskBoard / Terminal` 作为核心模块
-
-### 已经过期的旧说法
-
-- “系统只有 REST + WebSocket 两种通信”
-- “Terminal 不会在重连后重新 attach”
-- “前后端同进程”
-- “agentChatSessionId 只在内存中”
-- “task-scoped chat 是当前 UI 主路径”
-- “PM2 进程名是 ccm-api / ccm-static”
-
-当前正确的描述应是：
-
-> Claude Code Manager 是一个终端优先的多任务管理界面。它以 React + Express + socket.io + SSE + PTY + SQLite 组成，前端管理项目和任务，后端按 adapter 启动 Claude/Codex 会话，并为终端恢复、聊天、文件同步和自部署提供支撑能力。

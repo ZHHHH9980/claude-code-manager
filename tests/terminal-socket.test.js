@@ -11,6 +11,8 @@ const { describe, it, after, before, mock } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('http');
 const { Server } = require('socket.io');
+const { registerTerminalSocketHandlers } = require('../server/terminal-socket');
+const { normalizeSessionName } = require('../server/terminal-http-helpers');
 
 // --- Mock pty-manager ---
 let lastResizeCols = null;
@@ -21,10 +23,6 @@ const mockOnDataCallbacks = [];
 const mockPtyProcess = {
   cols: 120,
   rows: 30,
-  onData(cb) {
-    mockOnDataCallbacks.push(cb);
-    return { dispose: mock.fn() };
-  },
   resize(c, r) { lastResizeCols = c; lastResizeRows = r; this.cols = c; this.rows = r; },
   write(data) { lastInputData = data; },
 };
@@ -42,6 +40,17 @@ const mockPtyManager = {
   capturePane(sessionName) {
     return this.screenContent.get(sessionName) || '';
   },
+  sessionExists(name) {
+    return mockSessions.has(name);
+  },
+  attachSession(name) {
+    const entry = mockSessions.get(name);
+    if (!entry) throw new Error(`session ${name} not found`);
+    return entry;
+  },
+  getBufferedOutput(name) {
+    return this.screenContent.get(name) || '';
+  },
   resizeSession(name, cols, rows) {
     const entry = mockSessions.get(name);
     if (entry) entry.ptyProcess.resize(cols, rows);
@@ -52,7 +61,15 @@ const mockPtyManager = {
   },
 };
 
-// --- Set up socket.io server with terminal handlers (mirrors server/index.js:649-679) ---
+function emitPtyData(sessionName, data) {
+  const entry = mockSessions.get(sessionName);
+  if (!entry) return;
+  for (const client of entry.clients) {
+    client.emit(`terminal:data:${sessionName}`, data);
+  }
+}
+
+// --- Set up socket.io server with real terminal socket handlers ---
 let httpServer, io, serverPort;
 const allClients = [];
 
@@ -60,62 +77,10 @@ function setupServer() {
   return new Promise((resolve) => {
     httpServer = http.createServer();
     io = new Server(httpServer, { cors: { origin: '*' } });
-
-    io.on('connection', (socket) => {
-      const attachedSessions = new Set();
-
-      socket.on('terminal:attach', (payload) => {
-        const sessionName = typeof payload === 'string' ? payload : payload?.sessionName;
-        const initCols = typeof payload === 'object' && payload?.cols > 0 ? payload.cols : null;
-        const initRows = typeof payload === 'object' && payload?.rows > 0 ? payload.rows : null;
-        const replayBuffer = typeof payload === 'object' && typeof payload?.replayBuffer === 'boolean'
-          ? payload.replayBuffer
-          : true;
-        const forceRedraw = typeof payload === 'object' && typeof payload?.forceRedraw === 'boolean'
-          ? payload.forceRedraw
-          : true;
-
-        const entry = mockPtyManager.sessions.get(sessionName);
-        if (!entry) return socket.emit('terminal:error', 'Session not found');
-        attachedSessions.add(sessionName);
-        entry.clients.add(socket);
-        entry.ptyProcess.onData((data) => socket.emit(`terminal:data:${sessionName}`, data));
-        // Replay current screen content
-        if (replayBuffer) {
-          const captured = mockPtyManager.capturePane(sessionName);
-          if (captured && captured.trim()) socket.emit(`terminal:data:${sessionName}`, captured);
-        }
-        // Resize PTY to client dimensions BEFORE SIGWINCH
-        if (initCols && initRows) {
-          mockPtyManager.resizeSession(sessionName, initCols, initRows);
-        }
-        // SIGWINCH toggle
-        if (forceRedraw) {
-          const { cols, rows } = entry.ptyProcess;
-          if (cols > 1 && rows > 1) {
-            entry.ptyProcess.resize(cols - 1, rows);
-            setTimeout(() => entry.ptyProcess.resize(cols, rows), 50);
-          }
-        }
-      });
-
-      socket.on('terminal:input', ({ sessionName: sn, data }) => {
-        if (sn) mockPtyManager.sendInput(sn, data);
-      });
-
-      socket.on('terminal:resize', ({ sessionName: sn, cols, rows }) => {
-        if (sn && cols > 0 && rows > 0) {
-          mockPtyManager.resizeSession(sn, cols, rows);
-        }
-      });
-
-      socket.on('disconnect', () => {
-        for (const sessionName of attachedSessions) {
-          const entry = mockPtyManager.sessions.get(sessionName);
-          if (entry) entry.clients.delete(socket);
-        }
-        attachedSessions.clear();
-      });
+    registerTerminalSocketHandlers({
+      io,
+      ptyManager: mockPtyManager,
+      normalizeSessionName,
     });
 
     httpServer.listen(0, () => {
@@ -174,9 +139,7 @@ describe('terminal socket handlers', () => {
     const dataPromise = new Promise(r => client.on('terminal:data:test-session', r));
     client.emit('terminal:attach', 'test-session');
     await wait(50);
-    // Simulate pty output
-    const latestCb = mockOnDataCallbacks[mockOnDataCallbacks.length - 1];
-    latestCb('hello from pty');
+    emitPtyData('test-session', 'hello from pty');
     const received = await dataPromise;
     assert.equal(received, 'hello from pty');
     client.disconnect();
@@ -241,9 +204,8 @@ describe('terminal socket handlers', () => {
     await new Promise(r => client1.on('connect', r));
     client1.emit('terminal:attach', 'test-session');
     await wait(100);
-    const cb1 = mockOnDataCallbacks[mockOnDataCallbacks.length - 1];
     const data1Promise = new Promise(r => client1.on('terminal:data:test-session', r));
-    cb1('first session data');
+    emitPtyData('test-session', 'first session data');
     const d1 = await data1Promise;
     assert.equal(d1, 'first session data');
     // Simulate modal close — client disconnects
@@ -256,9 +218,7 @@ describe('terminal socket handlers', () => {
     const data2Promise = new Promise(r => client2.on('terminal:data:test-session', r));
     client2.emit('terminal:attach', 'test-session');
     await wait(100);
-    // Simulate pty output after re-attach
-    const cb2 = mockOnDataCallbacks[mockOnDataCallbacks.length - 1];
-    cb2('second session data');
+    emitPtyData('test-session', 'second session data');
     const d2 = await data2Promise;
     assert.equal(d2, 'second session data', 'must receive data after re-attach');
     client2.disconnect();
