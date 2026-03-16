@@ -196,7 +196,8 @@ struct CCMAPIClient {
     }
 
     func fetchTaskChatHistory(taskID: String) async throws -> [CCMChatMessage] {
-        let data = try await request(path: "/api/tasks/\(taskID)/chat/history")
+        let chatURL = await resolvedChatBaseURL()
+        let data = try await request(path: "/api/tasks/\(taskID)/chat/history", baseURLOverride: chatURL)
         let payload = try decoder.decode(CCMTaskChatHistoryResponse.self, from: data)
         return payload.messages
     }
@@ -204,11 +205,13 @@ struct CCMAPIClient {
     func sendTaskChat(taskID: String, message: String) async throws -> String {
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
+        let chatURL = await resolvedChatBaseURL()
 
         var request = try buildRequest(
             path: "/api/tasks/\(taskID)/chat",
             method: "POST",
-            jsonBody: ["message": trimmed]
+            jsonBody: ["message": trimmed],
+            baseURLOverride: chatURL
         )
         request.timeoutInterval = 300
 
@@ -252,13 +255,36 @@ struct CCMAPIClient {
         return chunks.joined()
     }
 
+    private func resolvedChatBaseURL() async -> URL {
+        do {
+            let data = try await request(path: "/api/runtime-config")
+            let payload = try decoder.decode(CCMRuntimeConfigResponse.self, from: data)
+            if payload.chatManagerEnabled == true,
+               let raw = payload.chatBaseURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !raw.isEmpty,
+               let url = URL(string: raw),
+               let scheme = url.scheme,
+               scheme == "http" || scheme == "https" {
+                return url
+            }
+        } catch {}
+        return baseURL
+    }
+
     private func request(
         path: String,
         method: String = "GET",
         queryItems: [URLQueryItem] = [],
-        jsonBody: [String: Any]? = nil
+        jsonBody: [String: Any]? = nil,
+        baseURLOverride: URL? = nil
     ) async throws -> Data {
-        var request = try buildRequest(path: path, method: method, queryItems: queryItems, jsonBody: jsonBody)
+        var request = try buildRequest(
+            path: path,
+            method: method,
+            queryItems: queryItems,
+            jsonBody: jsonBody,
+            baseURLOverride: baseURLOverride
+        )
         request.timeoutInterval = 20
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -276,9 +302,11 @@ struct CCMAPIClient {
         path: String,
         method: String = "GET",
         queryItems: [URLQueryItem] = [],
-        jsonBody: [String: Any]? = nil
+        jsonBody: [String: Any]? = nil,
+        baseURLOverride: URL? = nil
     ) throws -> URLRequest {
-        guard var components = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false) else {
+        let requestBaseURL = baseURLOverride ?? baseURL
+        guard var components = URLComponents(url: requestBaseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false) else {
             throw CCMAPIClientError.invalidBaseURL
         }
         if !queryItems.isEmpty {

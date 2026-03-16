@@ -3,7 +3,7 @@ const { randomUUID } = require('crypto');
 
 function createTaskChatService({
   db,
-  ptyManager,
+  sessionClient,
   taskChatRuntimeManager,
   ensureTaskProcess,
   buildTaskSessionPrompt,
@@ -48,7 +48,7 @@ function createTaskChatService({
       };
     }
 
-    const runtime = ensureTaskProcess(task, { ensurePty: false });
+    const runtime = await ensureTaskProcess(task, { ensurePty: false });
     if (!runtime) {
       return {
         handled: false,
@@ -59,7 +59,7 @@ function createTaskChatService({
 
     const project = task.project_id ? db.getProject(task.project_id) : null;
     if (isTaskStatusQuery(safeMessage)) {
-      const quickReply = buildTaskStatusReply(task, project, ptyManager.sessionExists(runtime.sessionName));
+      const quickReply = buildTaskStatusReply(task, project, await sessionClient.sessionExists(runtime.sessionName));
       db.appendTaskChatMessage(taskId, 'user', safeMessage);
       db.appendTaskChatMessage(taskId, 'assistant', quickReply);
       prepareSSE(res);

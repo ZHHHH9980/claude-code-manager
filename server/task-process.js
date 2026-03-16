@@ -4,7 +4,7 @@ const { execSync } = require('child_process');
 function createTaskProcessService({
   db,
   fs,
-  ptyManager,
+  sessionClient,
   watchProgress,
   syncTaskToNotion,
   resolveAdapter,
@@ -32,14 +32,14 @@ function createTaskProcessService({
   }
 
   function launchTaskAdapter(sessionName, { adapter, model, context, sessionEnvExports }) {
-    launchAdapterInSession(
+    return launchAdapterInSession(
       sessionName,
       { adapter, model, context, sessionEnvExports },
-      { ptyManager, aliases: modelAliases },
+      { sessionClient, aliases: modelAliases },
     );
   }
 
-  function startTaskSession(taskId, { requestedPath, model, mode } = {}) {
+  async function startTaskSession(taskId, { requestedPath, model, mode } = {}) {
     const existingTask = db.getTask(taskId);
     if (!existingTask) {
       return {
@@ -109,24 +109,22 @@ function createTaskProcessService({
     let ptyOk = true;
     let error = null;
     try {
-      const existed = ptyManager.sessionExists(sessionName);
+      const existed = await sessionClient.sessionExists(sessionName);
       if (existed) {
-        ptyManager.killSession(sessionName);
+        await sessionClient.killSession(sessionName);
       }
-      ptyManager.ensureSession(sessionName, resolvedWorktreePath);
+      await sessionClient.ensureSession(sessionName, resolvedWorktreePath);
       setTimeout(() => {
-        try {
-          launchTaskAdapter(sessionName, {
+        Promise.resolve(launchTaskAdapter(sessionName, {
             adapter,
             model: finalModel,
             context: `start task ${taskId}`,
             sessionEnvExports,
-          });
-        } catch (err) {
+          })).catch((err) => {
           ptyOk = false;
           error = err?.message || String(err);
           console.warn(`pty sendInput failed for task ${taskId}:`, err?.message || err);
-        }
+        });
       }, 500);
     } catch (err) {
       ptyOk = false;
@@ -140,7 +138,7 @@ function createTaskProcessService({
     };
   }
 
-  function ensureTaskProcess(task, opts = {}) {
+  async function ensureTaskProcess(task, opts = {}) {
     const { ensurePty = true } = opts;
     if (!task) return null;
 
@@ -163,25 +161,23 @@ function createTaskProcessService({
     syncInstructionFilesSafe(cwd, task, project);
 
     if (ensurePty) {
-      const existed = ptyManager.sessionExists(sessionName);
+      const existed = await sessionClient.sessionExists(sessionName);
       try {
-        ptyManager.ensureSession(sessionName, cwd || process.env.HOME || '/');
+        await sessionClient.ensureSession(sessionName, cwd || process.env.HOME || '/');
         if (!existed) {
           setTimeout(() => {
-            try {
-              if (!isCommandAvailable(adapter.cli)) {
-                console.warn(`task ${task.id} launch skipped: CLI not found: ${adapter.cli}`);
-                return;
-              }
-              launchTaskAdapter(sessionName, {
+            if (!isCommandAvailable(adapter.cli)) {
+              console.warn(`task ${task.id} launch skipped: CLI not found: ${adapter.cli}`);
+              return;
+            }
+            Promise.resolve(launchTaskAdapter(sessionName, {
                 adapter,
                 model: finalModel,
                 context: `ensure task ${task.id}`,
                 sessionEnvExports,
-              });
-            } catch (err) {
+              })).catch((err) => {
               console.warn(`pty sendInput failed for task ${task.id}:`, err?.message || err);
-            }
+            });
           }, 500);
         }
       } catch (err) {
@@ -208,14 +204,14 @@ function createTaskProcessService({
     return { sessionName, cwd };
   }
 
-  function recoverSessions() {
-    const aliveSessions = ptyManager.listAliveSessions();
+  async function recoverSessions() {
+    const aliveSessions = await sessionClient.listAliveSessions();
     const tasks = db.getTasks();
     for (const task of tasks) {
       if (task.status !== 'in_progress' || !task.pty_session) continue;
 
       if (aliveSessions.includes(task.pty_session)) {
-        ptyManager.attachSession(task.pty_session);
+        try { await sessionClient.attachSession(task.pty_session); } catch {}
         if (task.worktree_path) watchProgress(task.worktree_path, task.id);
         console.log(`Recovered session: ${task.pty_session}`);
         continue;
@@ -228,33 +224,32 @@ function createTaskProcessService({
       } catch {}
 
       try {
-        const entry = ptyManager.ensureSession(task.pty_session, task.worktree_path);
-        if (savedBuffer) {
+        await sessionClient.ensureSession(task.pty_session, task.worktree_path);
+        if (!sessionClient.isRemote() && savedBuffer) {
+          const entry = await sessionClient.attachSession(task.pty_session);
           entry.outputBuffer = `${savedBuffer}\r\n\x1b[33m[session auto-recovered after server restart]\x1b[0m\r\n`;
         }
         if (task.worktree_path) watchProgress(task.worktree_path, task.id);
 
         setTimeout(() => {
-          try {
-            const resolved = resolveAdapter(task.mode);
-            const adapter = resolved.adapter;
-            if (resolved.usedLegacyAlias) {
-              console.warn(
-                `[adapter] legacy mode "${resolved.requestedName}" detected during recovery, fallback to "${resolved.resolvedName}"`,
-              );
-            }
-            if (!isCommandAvailable(adapter.cli)) {
-              console.warn(`recover task ${task.id} skipped: CLI not found: ${adapter.cli}`);
-              return;
-            }
-            const project = task?.project_id ? db.getProject(task.project_id) : null;
-            launchTaskAdapter(task.pty_session, {
+          const resolved = resolveAdapter(task.mode);
+          const adapter = resolved.adapter;
+          if (resolved.usedLegacyAlias) {
+            console.warn(
+              `[adapter] legacy mode "${resolved.requestedName}" detected during recovery, fallback to "${resolved.resolvedName}"`,
+            );
+          }
+          if (!isCommandAvailable(adapter.cli)) {
+            console.warn(`recover task ${task.id} skipped: CLI not found: ${adapter.cli}`);
+            return;
+          }
+          const project = task?.project_id ? db.getProject(task.project_id) : null;
+          Promise.resolve(launchTaskAdapter(task.pty_session, {
               adapter,
               model: task.model || adapter.defaultModel,
               context: `recover task ${task.id}`,
               sessionEnvExports: buildProjectContextEnvExports(task, project),
-            });
-          } catch {}
+            })).catch(() => {});
         }, 500);
 
         console.log(`Auto-restarted session: ${task.pty_session}`);

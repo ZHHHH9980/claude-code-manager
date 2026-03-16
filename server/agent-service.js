@@ -3,7 +3,7 @@ const { randomUUID } = require('crypto');
 
 function createAgentService({
   db,
-  ptyManager,
+  sessionClient,
   taskChatRuntimeManager,
   resolveAdapter,
   isCommandAvailable,
@@ -30,7 +30,7 @@ function createAgentService({
     db.clearAgentChatMessages();
   }
 
-  function startTerminal(mode = 'claude') {
+  async function startTerminal(mode = 'claude') {
     const resolved = resolveAdapter(mode);
     const adapter = resolved.adapter;
     if (resolved.usedLegacyAlias) {
@@ -51,21 +51,19 @@ function createAgentService({
     let ptyOk = true;
     let error = null;
     try {
-      const existed = ptyManager.sessionExists(terminalSessionName);
-      ptyManager.ensureSession(terminalSessionName, rootDir);
+      const existed = await sessionClient.sessionExists(terminalSessionName);
+      await sessionClient.ensureSession(terminalSessionName, rootDir);
       if (!existed) {
         setTimeout(() => {
-          try {
-            launchAdapterInSession(
+          Promise.resolve(launchAdapterInSession(
               terminalSessionName,
               { adapter, model: adapter.defaultModel, context: 'agent terminal' },
-              { ptyManager, aliases: modelAliases },
-            );
-          } catch (err) {
+              { sessionClient, aliases: modelAliases },
+            )).catch((err) => {
             ptyOk = false;
             error = err?.message || String(err);
             console.warn('agent terminal sendInput failed:', err?.message || err);
-          }
+          });
         }, 500);
       }
     } catch (err) {
@@ -81,9 +79,9 @@ function createAgentService({
     };
   }
 
-  function stopTerminal() {
+  async function stopTerminal() {
     try {
-      ptyManager.killSession(terminalSessionName);
+      await sessionClient.killSession(terminalSessionName);
     } catch {}
   }
 

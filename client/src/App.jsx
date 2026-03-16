@@ -4,7 +4,7 @@ import { TaskBoard } from './components/TaskBoard';
 import { Terminal } from './components/Terminal';
 
 import { useSocket } from './hooks/useSocket';
-import { API_BASE_URL } from './config';
+import { API_BASE_URL, DEFAULT_TERMINAL_SOCKET_URL } from './config';
 
 const STORAGE_SELECTED_PROJECT_ID = 'ccm-selected-project-id';
 const STORAGE_ACTIVE_TASK_ID = 'ccm-active-task-id';
@@ -72,7 +72,8 @@ export default function App() {
 
 
 
-  const { socket } = useSocket();
+  const [terminalSocketUrl, setTerminalSocketUrl] = useState(null);
+  const { socket } = useSocket(terminalSocketUrl);
   const [agentTerminalSession, setAgentTerminalSession] = useState(null);
   const [agentTerminalReady, setAgentTerminalReady] = useState(false);
   const [adapters, setAdapters] = useState(DEFAULT_ADAPTERS);
@@ -117,6 +118,21 @@ export default function App() {
   useEffect(() => {
     loadProjects().catch(() => setProjects([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${API_BASE_URL}/api/runtime-config`)
+      .then((r) => r.json())
+      .then((payload) => {
+        if (cancelled) return;
+        setTerminalSocketUrl(payload?.terminalSocketUrl || DEFAULT_TERMINAL_SOCKET_URL);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setTerminalSocketUrl(DEFAULT_TERMINAL_SOCKET_URL);
+      });
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -396,9 +412,10 @@ export default function App() {
   }, [tasks, activeSession, activeTaskId, tasksLoaded]);
 
   useEffect(() => {
+    if (!terminalSocketUrl) return;
     startMainAgentTerminal(agentTerminalMode);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [terminalSocketUrl]);
 
   const currentAgentMode = getAgentModeMeta(agentTerminalMode, adapters);
 

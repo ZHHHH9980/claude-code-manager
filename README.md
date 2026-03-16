@@ -17,14 +17,22 @@ graph TB
         SS[client/dist]
     end
 
-    subgraph API["API + socket.io :3000"]
+    subgraph API["API Control Plane :3000"]
         REST[REST API]
-        SIO[WebSocket Terminal I/O]
         SSE[SSE Streams]
-        PTY[PTY Manager]
         DB[(SQLite)]
         AD[Adapter Registry]
         FW[PROGRESS Watcher]
+    end
+
+    subgraph Session["Session Manager :3001"]
+        SIO[WebSocket Terminal I/O]
+        PTY[PTY Manager]
+    end
+
+    subgraph Chat["Chat Manager :3002"]
+        CHAT[Agent/Task Chat SSE]
+        RTR[Chat Runtime Manager]
     end
 
     subgraph CLI["CLI Processes"]
@@ -38,11 +46,17 @@ graph TB
     TT <-->|WebSocket| SIO
     AT <-->|WebSocket| SIO
     Browser -->|SSE| SSE
+    Browser -->|SSE| CHAT
 
     REST --> DB
     SSE --> DB
+    REST --> PTY
+    REST --> RTR
     SIO <--> PTY
+    CHAT --> DB
+    CHAT --> RTR
     PTY --> AD
+    RTR --> CC
     AD --> CC
     AD --> CX
     REST --> FW
@@ -51,8 +65,8 @@ graph TB
 Communication in the live system uses three patterns:
 
 - REST for project/task CRUD and control operations
-- WebSocket for interactive terminal I/O
-- SSE for agent chat, task chat, and terminal streaming/embed endpoints
+- WebSocket for interactive terminal I/O via the dedicated session-manager process
+- SSE for agent/task chat via the dedicated chat-manager process, plus terminal streaming/embed endpoints
 
 Detailed reference:
 
@@ -63,7 +77,8 @@ Detailed reference:
 - Browser UI with `ProjectList`, `TaskBoard`, task terminal modal, and a persistent home agent terminal
 - Adapter-driven task startup for `claude` and `codex`
 - PTY session buffering and replay on reconnect
-- Session recovery after API restarts
+- Terminal session continuity across `claude-manager-api` restarts when `SESSION_MANAGER_URL` points to `claude-manager-session`
+- Chat runtime continuity across `claude-manager-api` restarts when `CHAT_MANAGER_URL` points to `claude-manager-chat`
 - SQLite-backed persistence for projects, tasks, chat history, and agent session state
 - Optional Notion sync and `PROGRESS.md` file watching
 
@@ -82,13 +97,26 @@ cp .env.example .env
 # Development
 cd client && npm run dev    # Frontend :5173 (Vite)
 npm run dev                 # API :3000
+npm run dev:session         # Session manager :3001 (optional but required for restart-safe terminals)
+npm run dev:chat            # Chat manager :3002 (optional but required for restart-safe chat streams)
 
 # Production build
 npm run build
 
 # Production processes
+pm2 start server/session-manager.js --name claude-manager-session
+pm2 start server/chat-manager.js --name claude-manager-chat
 pm2 start server/index.js --name claude-manager-api
 pm2 start static-server.js --name claude-manager-static
+```
+
+To enable split runtime mode, export these environment variables for the API process:
+
+```bash
+export SESSION_MANAGER_URL=http://127.0.0.1:3001
+export SESSION_MANAGER_PUBLIC_PORT=3001
+export CHAT_MANAGER_URL=http://127.0.0.1:3002
+export CHAT_MANAGER_PUBLIC_PORT=3002
 ```
 
 ## Deployment

@@ -38,7 +38,9 @@ function startServerAndRecover({
 }) {
   server.listen(port, () => {
     logger.log(`Claude Code Manager running on http://localhost:${port}`);
-    recoverSessions();
+    Promise.resolve()
+      .then(() => recoverSessions())
+      .catch((err) => logger.error('Failed to recover sessions:', err?.message || err));
   });
 }
 

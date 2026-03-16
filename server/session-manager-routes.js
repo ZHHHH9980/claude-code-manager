@@ -1,28 +1,31 @@
 const {
   normalizeSessionName,
-  getTerminalState,
   sendTerminalJSONError,
   emitSSE,
   buildTerminalEmbedPage,
 } = require('./terminal-http-helpers');
-const { proxySessionManagerRequest } = require('./session-proxy');
 
-function findOwningTaskState(sessionName, db) {
-  const tasks = db.getTasks();
-  const owningTask = tasks.find((task) => task?.pty_session === sessionName) || null;
-  const owningRunningTask = tasks.find(
-    (task) => task?.pty_session === sessionName && task?.status === 'in_progress'
-  ) || null;
+function getSessionState(sessionName, ptyManager) {
+  const exists = ptyManager.sessionExists(sessionName);
+  const entry = exists ? ptyManager.sessions.get(sessionName) : null;
+  const output = exists ? ptyManager.getBufferedOutput(sessionName) : '';
+
   return {
-    taskId: owningTask?.id || null,
-    taskStatus: owningTask?.status || null,
-    runningTaskId: owningRunningTask?.id || null,
+    sessionName,
+    exists,
+    state: exists ? 'attached' : 'missing',
+    code: exists ? 'ok' : 'session_not_found',
+    attachedClients: exists ? Number(entry?.clients?.size || 0) : 0,
+    bufferBytes: output.length,
+    cols: exists ? Number(entry?.ptyProcess?.cols || 0) : 0,
+    rows: exists ? Number(entry?.ptyProcess?.rows || 0) : 0,
+    recoverable: exists,
   };
 }
 
-function registerLocalTerminalRoutes({ app, db, ptyManager }) {
+function registerSessionManagerPublicRoutes({ app, ptyManager }) {
   function buildState(sessionName) {
-    return getTerminalState(sessionName, { ptyManager, db });
+    return getSessionState(sessionName, ptyManager);
   }
 
   app.get('/api/terminal/:sessionName/state', (req, res) => {
@@ -47,6 +50,7 @@ function registerLocalTerminalRoutes({ app, db, ptyManager }) {
         { terminal: buildState(sessionName) }
       );
     }
+
     const replayRaw = String(req.query?.replay ?? '').trim().toLowerCase();
     const replayEnabled = !(replayRaw === '0' || replayRaw === 'false' || replayRaw === 'no');
     const replayBytesRaw = Number(req.query?.replay_bytes);
@@ -61,12 +65,8 @@ function registerLocalTerminalRoutes({ app, db, ptyManager }) {
 
     emitSSE(res, { type: 'ready', sessionName });
     let replay = replayEnabled ? ptyManager.getBufferedOutput(sessionName) : '';
-    if (replay && replay.length > replayBytes) {
-      replay = replay.slice(-replayBytes);
-    }
-    if (replay) {
-      emitSSE(res, { type: 'output', chunk: replay, replay: true });
-    }
+    if (replay && replay.length > replayBytes) replay = replay.slice(-replayBytes);
+    if (replay) emitSSE(res, { type: 'output', chunk: replay, replay: true });
 
     const unsubscribe = ptyManager.subscribeOutput(sessionName, (chunk) => {
       emitSSE(res, { type: 'output', chunk });
@@ -176,83 +176,104 @@ function registerLocalTerminalRoutes({ app, db, ptyManager }) {
   });
 }
 
-function registerRemoteTerminalRoutes({ app, db, sessionClient }) {
-  app.get('/api/terminal/:sessionName/state', async (req, res) => {
+function registerSessionManagerInternalRoutes({ app, ptyManager }) {
+  app.get('/internal/sessions', (req, res) => {
+    res.json({ sessions: ptyManager.listAliveSessions() });
+  });
+
+  app.post('/internal/sessions/ensure', (req, res) => {
+    const sessionName = normalizeSessionName(req.body?.sessionName);
+    if (!sessionName) {
+      return sendTerminalJSONError(res, 400, 'invalid_session_name', 'invalid session name');
+    }
+    const cwd = String(req.body?.cwd || process.env.HOME || '/');
+    try {
+      ptyManager.ensureSession(sessionName, cwd);
+      res.json(getSessionState(sessionName, ptyManager));
+    } catch (err) {
+      sendTerminalJSONError(res, 500, 'session_create_failed', err?.message || 'failed to ensure session');
+    }
+  });
+
+  app.post('/internal/sessions/:sessionName/attach', (req, res) => {
     const sessionName = normalizeSessionName(req.params.sessionName);
     if (!sessionName) {
       return sendTerminalJSONError(res, 400, 'invalid_session_name', 'invalid session name');
     }
     try {
-      const state = await sessionClient.getSessionState(sessionName);
-      res.json({
-        ...state,
-        ...findOwningTaskState(sessionName, db),
-      });
+      ptyManager.attachSession(sessionName);
+      res.json(getSessionState(sessionName, ptyManager));
     } catch (err) {
-      sendTerminalJSONError(res, err?.status || 502, 'session_manager_unavailable', err?.message || 'session manager unavailable');
+      sendTerminalJSONError(res, 404, 'session_not_found', err?.message || 'session not found');
     }
   });
 
-  const proxyPaths = [
-    '/api/terminal/:sessionName/stream',
-    '/api/terminal/:sessionName/input',
-    '/api/terminal/:sessionName/resize',
-    '/api/terminal/:sessionName/read',
-    '/api/terminal/:sessionName/embed',
-  ];
-
-  for (const routePath of proxyPaths) {
-    const method = routePath.includes('/input') || routePath.includes('/resize') ? 'post' : 'get';
-    app[method](routePath, async (req, res) => {
-      const sessionName = normalizeSessionName(req.params.sessionName);
-      if (!sessionName) {
-        return sendTerminalJSONError(res, 400, 'invalid_session_name', 'invalid session name');
-      }
-      await proxySessionManagerRequest({
-        req,
-        res,
-        sessionManagerUrl: sessionClient.getBaseUrl(),
-        targetPath: req.path,
-      });
-    });
-  }
-}
-
-function registerTerminalHttpRoutes({
-  app,
-  db,
-  ptyManager,
-  sessionClient,
-  ensureTaskProcess,
-  getBrowserTerminalSocketUrl = () => '',
-}) {
-  app.post('/api/tasks/:id/terminal/session', async (req, res) => {
-    const { id } = req.params;
-    const task = db.getTask(id);
-    if (!task) return res.status(404).json({ error: 'task not found' });
-    if (task.status !== 'in_progress') {
-      return res.status(400).json({ error: 'task is not running' });
+  app.get('/internal/sessions/:sessionName/state', (req, res) => {
+    const sessionName = normalizeSessionName(req.params.sessionName);
+    if (!sessionName) {
+      return sendTerminalJSONError(res, 400, 'invalid_session_name', 'invalid session name');
     }
-    const runtime = await ensureTaskProcess(task, { ensurePty: true });
-    if (!runtime) {
-      return res.status(400).json({ error: 'task worktree/repo path missing' });
-    }
-    res.json({
-      sessionName: runtime.sessionName,
-      ready: await sessionClient.sessionExists(runtime.sessionName),
-      mode: task.mode || null,
-      terminalSocketUrl: getBrowserTerminalSocketUrl(req),
-    });
+    res.json(getSessionState(sessionName, ptyManager));
   });
 
-  if (sessionClient.isRemote()) {
-    registerRemoteTerminalRoutes({ app, db, sessionClient });
-    return;
-  }
+  app.get('/internal/sessions/:sessionName/read', (req, res) => {
+    const sessionName = normalizeSessionName(req.params.sessionName);
+    if (!sessionName) {
+      return sendTerminalJSONError(res, 400, 'invalid_session_name', 'invalid session name');
+    }
+    if (!ptyManager.sessionExists(sessionName)) {
+      return sendTerminalJSONError(res, 404, 'session_not_found', 'session not found');
+    }
+    const output = ptyManager.getBufferedOutput(sessionName) || '';
+    res.json({ from: 0, next: output.length, chunk: output });
+  });
 
-  registerLocalTerminalRoutes({ app, db, ptyManager });
+  app.post('/internal/sessions/:sessionName/input', (req, res) => {
+    const sessionName = normalizeSessionName(req.params.sessionName);
+    if (!sessionName) {
+      return sendTerminalJSONError(res, 400, 'invalid_session_name', 'invalid session name');
+    }
+    if (!ptyManager.sessionExists(sessionName)) {
+      return sendTerminalJSONError(res, 404, 'session_not_found', 'session not found');
+    }
+    const data = typeof req.body?.data === 'string' ? req.body.data : '';
+    if (!data) {
+      return sendTerminalJSONError(res, 400, 'input_required', 'input data required');
+    }
+    ptyManager.sendInput(sessionName, data);
+    res.json({ ok: true });
+  });
+
+  app.post('/internal/sessions/:sessionName/resize', (req, res) => {
+    const sessionName = normalizeSessionName(req.params.sessionName);
+    if (!sessionName) {
+      return sendTerminalJSONError(res, 400, 'invalid_session_name', 'invalid session name');
+    }
+    if (!ptyManager.sessionExists(sessionName)) {
+      return sendTerminalJSONError(res, 404, 'session_not_found', 'session not found');
+    }
+    const cols = Math.max(40, Math.min(400, Number(req.body?.cols) || 120));
+    const rows = Math.max(10, Math.min(200, Number(req.body?.rows) || 30));
+    ptyManager.resizeSession(sessionName, cols, rows);
+    res.json({ ok: true, cols, rows });
+  });
+
+  app.post('/internal/sessions/:sessionName/kill', (req, res) => {
+    const sessionName = normalizeSessionName(req.params.sessionName);
+    if (!sessionName) {
+      return sendTerminalJSONError(res, 400, 'invalid_session_name', 'invalid session name');
+    }
+    ptyManager.killSession(sessionName);
+    res.json({ ok: true });
+  });
+
+  app.get('/healthz', (req, res) => {
+    res.json({ ok: true, service: 'session-manager' });
+  });
 }
 
 module.exports = {
-  registerTerminalHttpRoutes,
+  getSessionState,
+  registerSessionManagerPublicRoutes,
+  registerSessionManagerInternalRoutes,
 };

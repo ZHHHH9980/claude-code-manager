@@ -4,14 +4,14 @@ const assert = require('node:assert/strict');
 const { createTaskProcessService } = require('../server/task-process');
 
 describe('task-process', () => {
-  it('returns a 400 payload when task working directory cannot be resolved', () => {
+  it('returns a 400 payload when task working directory cannot be resolved', async () => {
     const service = createTaskProcessService({
       db: {
         getTask: () => ({ id: 't1', project_id: 'p1' }),
         getProject: () => ({ id: 'p1', github_repo: 'owner/repo' }),
       },
       fs: {},
-      ptyManager: {},
+      sessionClient: {},
       watchProgress: () => {},
       syncTaskToNotion: () => {},
       resolveAdapter: () => ({ adapter: { name: 'codex', cli: 'codex', defaultModel: 'gpt-5.4' }, usedLegacyAlias: false }),
@@ -25,17 +25,17 @@ describe('task-process', () => {
       sessionsDir: '/tmp/sessions',
     });
 
-    const result = service.startTaskSession('t1', { requestedPath: '/tmp/nope', mode: 'codex' });
+    const result = await service.startTaskSession('t1', { requestedPath: '/tmp/nope', mode: 'codex' });
     assert.equal(result.httpStatus, 400);
     assert.equal(result.body.ptyOk, false);
     assert.equal(result.body.error, 'missing cwd');
   });
 
-  it('returns null from ensureTaskProcess when cwd resolution fails', () => {
+  it('returns null from ensureTaskProcess when cwd resolution fails', async () => {
     const service = createTaskProcessService({
       db: { getProject: () => ({ id: 'p1' }), updateTask: () => null },
       fs: {},
-      ptyManager: {},
+      sessionClient: {},
       watchProgress: () => {},
       syncTaskToNotion: () => {},
       resolveAdapter: () => ({ adapter: { name: 'claude', cli: 'claude' }, usedLegacyAlias: false }),
@@ -49,11 +49,11 @@ describe('task-process', () => {
       sessionsDir: '/tmp/sessions',
     });
 
-    const runtime = service.ensureTaskProcess({ id: 't1', project_id: 'p1', mode: 'claude' }, { ensurePty: false });
+    const runtime = await service.ensureTaskProcess({ id: 't1', project_id: 'p1', mode: 'claude' }, { ensurePty: false });
     assert.equal(runtime, null);
   });
 
-  it('returns a stable session payload when starting a task succeeds', () => {
+  it('returns a stable session payload when starting a task succeeds', async () => {
     const updateTask = mock.fn(() => ({
       id: 't1',
       project_id: 'p1',
@@ -72,10 +72,10 @@ describe('task-process', () => {
         updateTask,
       },
       fs: {},
-      ptyManager: {
-        sessionExists: () => false,
+      sessionClient: {
+        sessionExists: async () => false,
         ensureSession,
-        killSession: () => {},
+        killSession: async () => {},
       },
       watchProgress: () => {},
       syncTaskToNotion: () => {},
@@ -90,7 +90,7 @@ describe('task-process', () => {
       sessionsDir: '/tmp/sessions',
     });
 
-    const result = service.startTaskSession('t1', { requestedPath: '/tmp/repo', mode: 'codex' });
+    const result = await service.startTaskSession('t1', { requestedPath: '/tmp/repo', mode: 'codex' });
     assert.equal(result.body.sessionName, 'claude-task-t1');
     assert.equal(result.body.ptyOk, true);
     assert.equal(result.body.mode, 'codex');

@@ -1,8 +1,8 @@
 function registerProjectTaskRoutes({
   app,
   db,
-  ptyManager,
-  taskChatRuntimeManager,
+  sessionClient,
+  chatRuntimeControl,
   taskProcessService,
   listAdapters,
   normalizeAdapterModel,
@@ -33,7 +33,7 @@ function registerProjectTaskRoutes({
     const { id } = req.params;
     const projectTasks = db.getTasks(id);
     for (const task of projectTasks) {
-      taskChatRuntimeManager.stopTask(task.id, 'project_delete');
+      chatRuntimeControl.stopTask(task.id, 'project_delete').catch(() => {});
     }
     const ok = db.deleteProject(id);
     if (!ok) return res.status(404).json({ error: 'project not found' });
@@ -57,10 +57,10 @@ function registerProjectTaskRoutes({
     res.json(task);
   });
 
-  app.post('/api/tasks/:id/start', (req, res) => {
+  app.post('/api/tasks/:id/start', async (req, res) => {
     const { id } = req.params;
     const { worktreePath, branch, model, mode } = req.body;
-    const result = taskProcessService.startTaskSession(id, {
+    const result = await taskProcessService.startTaskSession(id, {
       requestedPath: worktreePath,
       branch,
       model,
@@ -72,22 +72,22 @@ function registerProjectTaskRoutes({
     res.json(result.body);
   });
 
-  app.post('/api/tasks/:id/stop', (req, res) => {
+  app.post('/api/tasks/:id/stop', async (req, res) => {
     const { id } = req.params;
     const task = db.getTask(id);
-    taskChatRuntimeManager.stopTask(id, 'task_stop');
-    if (task?.pty_session) ptyManager.killSession(task.pty_session);
+    await chatRuntimeControl.stopTask(id, 'task_stop');
+    if (task?.pty_session) await sessionClient.killSession(task.pty_session);
     if (task?.worktree_path) unwatchProgress(task.worktree_path);
     const updated = db.updateTask(id, { status: 'done' });
     syncTaskToNotion(updated);
     res.json({ ok: true });
   });
 
-  app.delete('/api/tasks/:id', (req, res) => {
+  app.delete('/api/tasks/:id', async (req, res) => {
     const { id } = req.params;
     const task = db.getTask(id);
-    taskChatRuntimeManager.stopTask(id, 'task_delete');
-    if (task?.pty_session) ptyManager.killSession(task.pty_session);
+    await chatRuntimeControl.stopTask(id, 'task_delete');
+    if (task?.pty_session) await sessionClient.killSession(task.pty_session);
     if (task?.worktree_path) unwatchProgress(task.worktree_path);
     const ok = db.deleteTask(id);
     if (!ok) return res.status(404).json({ error: 'task not found' });

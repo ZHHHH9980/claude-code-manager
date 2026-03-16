@@ -34,6 +34,10 @@ const { createTaskProcessService } = require('./task-process');
 const { registerTerminalHttpRoutes } = require('./terminal-http-routes');
 const { normalizeSessionName } = require('./terminal-http-helpers');
 const { registerTerminalSocketHandlers } = require('./terminal-socket');
+const { createSessionClient } = require('./session-client');
+const { createSessionServiceConfig } = require('./session-service-config');
+const { createChatServiceConfig } = require('./chat-service-config');
+const { createChatRuntimeControl } = require('./chat-runtime-control');
 const {
   persistSessionBuffers,
   registerSigtermPersistence,
@@ -54,20 +58,30 @@ const MODEL_ALIASES = {
   },
 };
 const { corsOptions, socketCorsOptions } = createOriginPolicy({});
+const sessionServiceConfig = createSessionServiceConfig({});
+const chatServiceConfig = createChatServiceConfig({});
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
+const io = sessionServiceConfig.enabled ? null : new Server(server, {
   cors: socketCorsOptions,
 });
 const taskChatRuntimeManager = new TaskChatRuntimeManager({
   logMetric: (event, payload) => logChatMetric(event, payload),
 });
 const ROOT_DIR = path.join(__dirname, '..');
+const sessionClient = createSessionClient({
+  ptyManager,
+  baseUrl: sessionServiceConfig.internalUrl,
+});
+const chatRuntimeControl = createChatRuntimeControl({
+  taskChatRuntimeManager,
+  baseUrl: chatServiceConfig.internalUrl,
+});
 const taskProcessService = createTaskProcessService({
   db,
   fs,
-  ptyManager,
+  sessionClient,
   watchProgress,
   syncTaskToNotion,
   resolveAdapter,
@@ -83,7 +97,7 @@ const taskProcessService = createTaskProcessService({
 });
 const agentService = createAgentService({
   db,
-  ptyManager,
+  sessionClient,
   taskChatRuntimeManager,
   resolveAdapter,
   isCommandAvailable,
@@ -93,7 +107,7 @@ const agentService = createAgentService({
 });
 const taskChatService = createTaskChatService({
   db,
-  ptyManager,
+  sessionClient,
   taskChatRuntimeManager,
   ensureTaskProcess,
   buildTaskSessionPrompt,
@@ -117,8 +131,8 @@ app.use(createAccessTokenMiddleware({}));
 registerProjectTaskRoutes({
   app,
   db,
-  ptyManager,
-  taskChatRuntimeManager,
+  sessionClient,
+  chatRuntimeControl,
   taskProcessService,
   listAdapters,
   normalizeAdapterModel,
@@ -132,7 +146,18 @@ registerTerminalHttpRoutes({
   app,
   db,
   ptyManager,
+  sessionClient,
   ensureTaskProcess,
+  getBrowserTerminalSocketUrl: (req) => sessionServiceConfig.getBrowserUrl(req),
+});
+
+app.get('/api/runtime-config', (req, res) => {
+  res.json({
+    sessionManagerEnabled: sessionServiceConfig.enabled,
+    terminalSocketUrl: sessionServiceConfig.getBrowserUrl(req),
+    chatManagerEnabled: chatServiceConfig.enabled,
+    chatBaseUrl: chatServiceConfig.getBrowserUrl(req),
+  });
 });
 
 function logChatMetric(event, payload) {
@@ -142,25 +167,38 @@ function logChatMetric(event, payload) {
 function ensureTaskProcess(task, opts = {}) {
   return taskProcessService.ensureTaskProcess(task, opts);
 }
-registerAgentRoutes({ app, agentService });
-registerTaskChatRoutes({ app, db, taskChatService });
+registerTaskChatRoutes({
+  app,
+  db,
+  taskChatService,
+  proxyBaseUrl: chatServiceConfig.internalUrl,
+});
+registerAgentRoutes({
+  app,
+  agentService,
+  chatProxyBaseUrl: chatServiceConfig.internalUrl,
+});
 registerDeployRoutes({ app, deployService });
 
-registerTerminalSocketHandlers({
-  io,
-  ptyManager,
-  normalizeSessionName,
-});
-
-registerSigtermPersistence({
-  processObject: process,
-  persist: () => persistSessionBuffers({
-    fs,
-    sessionsDir: SESSIONS_DIR,
+if (io) {
+  registerTerminalSocketHandlers({
+    io,
     ptyManager,
-  }),
-  exit: () => process.exit(0),
-});
+    normalizeSessionName,
+  });
+}
+
+if (!sessionServiceConfig.enabled) {
+  registerSigtermPersistence({
+    processObject: process,
+    persist: () => persistSessionBuffers({
+      fs,
+      sessionsDir: SESSIONS_DIR,
+      ptyManager,
+    }),
+    exit: () => process.exit(0),
+  });
+}
 
 const PORT = process.env.PORT || 3000;
 startServerAndRecover({

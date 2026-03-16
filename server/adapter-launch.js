@@ -68,25 +68,26 @@ function buildProjectContextEnvExports(task, project) {
     .join('; ');
 }
 
-function launchAdapterInSession(
+async function launchAdapterInSession(
   sessionName,
   { adapter, model, context, sessionEnvExports },
-  { ptyManager, aliases = {} },
+  { sessionClient, ptyManager, aliases = {} },
 ) {
+  const terminalClient = sessionClient || ptyManager;
   const adapterExports = buildAdapterEnvExports(adapter);
-  ptyManager.sendInput(sessionName, 'export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 LC_CTYPE=en_US.UTF-8\n');
+  await terminalClient.sendInput(sessionName, 'export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 LC_CTYPE=en_US.UTF-8\n');
   if (adapterExports) {
-    ptyManager.sendInput(sessionName, `${adapterExports}\n`);
+    await terminalClient.sendInput(sessionName, `${adapterExports}\n`);
   }
   if (sessionEnvExports) {
-    ptyManager.sendInput(sessionName, `${sessionEnvExports}\n`);
+    await terminalClient.sendInput(sessionName, `${sessionEnvExports}\n`);
   }
-  ptyManager.sendInput(sessionName, `${buildAdapterLaunchCommand(adapter, model, aliases)}\n`);
+  await terminalClient.sendInput(sessionName, `${buildAdapterLaunchCommand(adapter, model, aliases)}\n`);
   if (adapter?.autoConfirm?.enabled) {
     const delayMs = Number(adapter?.autoConfirm?.delayMs) || 3000;
     setTimeout(() => {
       try {
-        ptyManager.sendInput(sessionName, '\n');
+        terminalClient.sendInput(sessionName, '\n');
       } catch {}
     }, delayMs);
   }

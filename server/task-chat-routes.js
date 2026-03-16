@@ -1,4 +1,40 @@
-function registerTaskChatRoutes({ app, db, taskChatService }) {
+const { proxySessionManagerRequest } = require('./session-proxy');
+
+function registerTaskChatRoutes({ app, db, taskChatService, proxyBaseUrl = '' }) {
+  if (proxyBaseUrl) {
+    app.get('/api/tasks/:id/chat/history', async (req, res) => {
+      await proxySessionManagerRequest({
+        req,
+        res,
+        sessionManagerUrl: proxyBaseUrl,
+        targetPath: req.path,
+      });
+    });
+
+    app.delete('/api/tasks/:id/chat/history', async (req, res) => {
+      await proxySessionManagerRequest({
+        req,
+        res,
+        sessionManagerUrl: proxyBaseUrl,
+        targetPath: req.path,
+      });
+    });
+
+    app.post('/api/tasks/:id/chat', async (req, res) => {
+      await proxySessionManagerRequest({
+        req,
+        res,
+        sessionManagerUrl: proxyBaseUrl,
+        targetPath: req.path,
+      });
+    });
+
+    app.post('/api/tasks/:id/stop-chat', (req, res) => {
+      res.json({ ok: true });
+    });
+    return;
+  }
+
   app.get('/api/tasks/:id/chat/history', (req, res) => {
     const { id } = req.params;
     const task = db.getTask(id);

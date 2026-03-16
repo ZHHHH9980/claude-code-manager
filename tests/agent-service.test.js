@@ -31,10 +31,10 @@ function createMockResponse() {
 }
 
 describe('agent-service', () => {
-  it('returns a CLI error payload when adapter command is missing', () => {
+  it('returns a CLI error payload when adapter command is missing', async () => {
     const service = createAgentService({
       db: { getAgentSessionId: () => null },
-      ptyManager: {},
+      sessionClient: {},
       taskChatRuntimeManager: { stopTask: () => {} },
       resolveAdapter: () => ({ adapter: { name: 'codex', cli: 'codex', defaultModel: 'gpt-5.4' }, usedLegacyAlias: false }),
       isCommandAvailable: () => false,
@@ -43,7 +43,7 @@ describe('agent-service', () => {
       terminalSessionName: 'agent-home',
     });
 
-    const result = service.startTerminal('codex');
+    const result = await service.startTerminal('codex');
     assert.deepEqual(result, {
       sessionName: 'agent-home',
       ptyOk: false,
@@ -62,7 +62,7 @@ describe('agent-service', () => {
         setAgentSessionId,
         clearAgentChatMessages,
       },
-      ptyManager: {},
+      sessionClient: {},
       taskChatRuntimeManager: { stopTask },
       resolveAdapter: () => ({ adapter: { name: 'claude', cli: 'claude', defaultModel: 'claude-sonnet-4-5' }, usedLegacyAlias: false }),
       isCommandAvailable: () => true,
@@ -92,7 +92,7 @@ describe('agent-service', () => {
         setAgentSessionId,
         appendAgentChatMessage,
       },
-      ptyManager: {},
+      sessionClient: {},
       taskChatRuntimeManager: { send, stopTask: () => {} },
       resolveAdapter: () => ({ adapter: { name: 'claude', cli: 'claude', defaultModel: 'claude-sonnet-4-5' }, usedLegacyAlias: false }),
       isCommandAvailable: () => true,

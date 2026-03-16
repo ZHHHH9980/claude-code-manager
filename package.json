@@ -3,6 +3,8 @@
   "version": "1.0.0",
   "scripts": {
     "dev": "node server/index.js",
+    "dev:session": "node server/session-manager.js",
+    "dev:chat": "node server/chat-manager.js",
     "static": "node static-server.js",
     "build": "cd client && npm run build",
     "test": "node --test tests/pty-manager.test.js tests/terminal-socket.test.js",

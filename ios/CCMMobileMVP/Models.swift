@@ -103,3 +103,17 @@ struct CCMChatMessage: Codable, Hashable, Identifiable {
 struct CCMTaskChatHistoryResponse: Codable, Hashable {
     let messages: [CCMChatMessage]
 }
+
+struct CCMRuntimeConfigResponse: Codable, Hashable {
+    let sessionManagerEnabled: Bool?
+    let terminalSocketURL: String?
+    let chatManagerEnabled: Bool?
+    let chatBaseURL: String?
+
+    enum CodingKeys: String, CodingKey {
+        case sessionManagerEnabled
+        case terminalSocketURL = "terminalSocketUrl"
+        case chatManagerEnabled
+        case chatBaseURL = "chatBaseUrl"
+    }
+}
