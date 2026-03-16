@@ -61,8 +61,8 @@ After deploy, verify:
 
 - UI responds on `http://43.138.129.193:8080`
 - API responds on `http://43.138.129.193:3000`
-- Session manager responds on `http://43.138.129.193:3001/healthz`
-- Chat manager responds on `http://43.138.129.193:3002/healthz`
+- Public session edge responds on `http://43.138.129.193:8080/healthz/session`
+- Public chat edge responds on `http://43.138.129.193:8080/healthz/chat`
 - `pm2 status` shows `claude-manager-session`, `claude-manager-chat`, `claude-manager-api`, and `claude-manager-static` as `online`
 
 Example checks:
@@ -70,7 +70,7 @@ Example checks:
 ```bash
 curl -I http://43.138.129.193:8080
 curl http://43.138.129.193:3000/api/adapters
-curl http://43.138.129.193:3001/healthz
-curl http://43.138.129.193:3002/healthz
+curl http://43.138.129.193:8080/healthz/session
+curl http://43.138.129.193:8080/healthz/chat
 ssh tencent 'cd /opt/claude-code-manager && git rev-parse --short HEAD && pm2 status'
 ```

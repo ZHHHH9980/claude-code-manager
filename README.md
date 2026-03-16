@@ -13,8 +13,9 @@ graph TB
         AT["Agent Terminal"]
     end
 
-    subgraph Static["Static Server :8080"]
+    subgraph Static["Static Server / Edge :8080"]
         SS[client/dist]
+        EDGE[Public Proxy]
     end
 
     subgraph API["API Control Plane :3000"]
@@ -41,12 +42,14 @@ graph TB
     end
 
     SS --> Browser
+    EDGE --> SIO
+    EDGE --> CHAT
     PL -->|REST| REST
     TB -->|REST| REST
-    TT <-->|WebSocket| SIO
-    AT <-->|WebSocket| SIO
+    TT <-->|WebSocket via :8080| SIO
+    AT <-->|WebSocket via :8080| SIO
     Browser -->|SSE| SSE
-    Browser -->|SSE| CHAT
+    Browser -->|SSE via :8080| CHAT
 
     REST --> DB
     SSE --> DB
@@ -65,8 +68,8 @@ graph TB
 Communication in the live system uses three patterns:
 
 - REST for project/task CRUD and control operations
-- WebSocket for interactive terminal I/O via the dedicated session-manager process
-- SSE for agent/task chat via the dedicated chat-manager process, plus terminal streaming/embed endpoints
+- WebSocket for interactive terminal I/O via the static-server public proxy to session-manager
+- SSE for agent/task chat via the static-server public proxy to chat-manager, plus terminal streaming/embed endpoints
 
 Detailed reference:
 
@@ -114,9 +117,9 @@ To enable split runtime mode, export these environment variables for the API pro
 
 ```bash
 export SESSION_MANAGER_URL=http://127.0.0.1:3001
-export SESSION_MANAGER_PUBLIC_PORT=3001
+export SESSION_MANAGER_PUBLIC_PORT=8080
 export CHAT_MANAGER_URL=http://127.0.0.1:3002
-export CHAT_MANAGER_PUBLIC_PORT=3002
+export CHAT_MANAGER_PUBLIC_PORT=8080
 ```
 
 ## Deployment

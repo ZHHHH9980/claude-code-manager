@@ -32,10 +32,10 @@ set -a && [ -f "$HOME/.bash_profile" ] && . "$HOME/.bash_profile" && set +a
 
 export SESSION_MANAGER_URL="${SESSION_MANAGER_URL:-http://127.0.0.1:3001}"
 export SESSION_MANAGER_PORT="${SESSION_MANAGER_PORT:-3001}"
-export SESSION_MANAGER_PUBLIC_PORT="${SESSION_MANAGER_PUBLIC_PORT:-3001}"
+export SESSION_MANAGER_PUBLIC_PORT="${SESSION_MANAGER_PUBLIC_PORT:-8080}"
 export CHAT_MANAGER_URL="${CHAT_MANAGER_URL:-http://127.0.0.1:3002}"
 export CHAT_MANAGER_PORT="${CHAT_MANAGER_PORT:-3002}"
-export CHAT_MANAGER_PUBLIC_PORT="${CHAT_MANAGER_PUBLIC_PORT:-3002}"
+export CHAT_MANAGER_PUBLIC_PORT="${CHAT_MANAGER_PUBLIC_PORT:-8080}"
 
 SESSION_CHANGED=0
 if echo "$CHANGED" | grep -Eq '^(package(-lock)?\.json|server/(session-manager\.js|session-manager-routes\.js|pty-manager\.js|terminal-socket\.js|terminal-http-helpers\.js|http-bootstrap\.js|runtime-lifecycle\.js))'; then
