@@ -1,7 +1,7 @@
 # Claude Code Manager - Agent Instructions
 
-This file should stay aligned with `AGENTS.md`.
-If `CLAUDE.md` and `AGENTS.md` ever diverge, the agent should treat that as documentation drift and sync them immediately.
+This file should stay aligned with `CLAUDE.md`.
+If `AGENTS.md` and `CLAUDE.md` ever diverge, the agent should treat that as documentation drift and sync them immediately.
 
 ## HARD RULES — READ FIRST
 
