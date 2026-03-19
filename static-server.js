@@ -2,6 +2,7 @@ const express = require('express');
 const http = require('http');
 const httpProxy = require('http-proxy');
 const path = require('path');
+const { proxyTo, writeProxyError } = require('./server/proxy-helpers');
 
 const app = express();
 const server = http.createServer(app);
@@ -16,19 +17,8 @@ const chatProxy = httpProxy.createProxyServer({
   xfwd: true,
 });
 
-function writeProxyError(res, err) {
-  if (res.headersSent) return;
-  res.statusCode = 502;
-  res.setHeader('content-type', 'application/json');
-  res.end(JSON.stringify({ error: err?.message || 'proxy unavailable' }));
-}
-
 sessionProxy.on('error', (err, req, res) => writeProxyError(res, err));
 chatProxy.on('error', (err, req, res) => writeProxyError(res, err));
-
-function proxyTo(proxy) {
-  return (req, res) => proxy.web(req, res);
-}
 
 app.use('/socket.io', proxyTo(sessionProxy));
 app.use('/api/terminal', proxyTo(sessionProxy));
@@ -60,6 +50,13 @@ server.on('upgrade', (req, socket, head) => {
   socket.destroy();
 });
 
-server.listen(PORT, () => {
-  console.log(`Static server running on http://localhost:${PORT}`);
-});
+if (require.main === module) {
+  server.listen(PORT, () => {
+    console.log(`Static server running on http://localhost:${PORT}`);
+  });
+}
+
+module.exports = {
+  proxyTo,
+  writeProxyError,
+};

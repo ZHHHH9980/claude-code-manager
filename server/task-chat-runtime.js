@@ -1,6 +1,9 @@
 const { spawn } = require('child_process');
 const { StringDecoder } = require('string_decoder');
 const { buildClaudeEnv } = require('./claude-env');
+const claudeAdapter = require('./adapters/claude');
+
+const DEFAULT_CHAT_MODEL = process.env.CLAUDE_CHAT_MODEL || claudeAdapter.defaultModel || 'claude-sonnet-4-5';
 
 function extractAssistantText(payload) {
   const content = payload?.message?.content;
@@ -31,10 +34,12 @@ class TaskChatRuntime {
 
   spawn() {
     const env = buildClaudeEnv();
+    const model = String(DEFAULT_CHAT_MODEL || '').trim();
 
     const args = [
       '--print',
       '--verbose',
+      '--model', model,
       '--input-format', 'stream-json',
       '--output-format', 'stream-json',
       '--allowedTools', 'Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep',

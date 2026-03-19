@@ -81,6 +81,8 @@ describe('task-chat-runtime UTF-8 decoding', () => {
     assert.equal(lastSpawnArgs?.cmd, 'claude');
     assert.ok(Array.isArray(lastSpawnArgs?.args));
     assert.ok(lastSpawnArgs.args.includes('--verbose'));
+    assert.ok(lastSpawnArgs.args.includes('--model'));
+    assert.ok(lastSpawnArgs.args.includes('claude-sonnet-4-5'));
 
     await new Promise((resolve) => setImmediate(resolve));
 

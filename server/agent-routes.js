@@ -40,6 +40,16 @@ function registerAgentChatRoutes({ app, agentService, proxyBaseUrl = '' }) {
     res.json({ ok: true });
   });
 
+  app.post('/api/agent', async (req, res) => {
+    try {
+      const result = await agentService.streamResponse(req.body?.message, res);
+      if (!result?.handled) {
+        res.status(result?.httpStatus || 500).json(result?.body || { error: 'agent chat failed' });
+      }
+    } catch (err) {
+      res.status(500).json({ error: err?.message || 'agent chat failed' });
+    }
+  });
 }
 
 function registerAgentTerminalRoutes({ app, agentService }) {
