@@ -294,6 +294,27 @@ export default function App() {
     return true;
   }
 
+  async function handleDeleteProject(project) {
+    if (!project?.id) return false;
+    const deletingSelectedProject = String(selectedProject?.id) === String(project.id);
+    const deletingActiveTask = tasks.some((task) => String(task.id) === String(activeTaskId));
+    const res = await fetch(`${API_BASE_URL}/api/projects/${project.id}`, { method: 'DELETE' });
+    let payload = {};
+    try { payload = await res.json(); } catch {}
+    if (!res.ok || payload?.ok !== true) {
+      window.alert(`Failed to delete project: ${payload?.error || 'unknown error'}`);
+      return false;
+    }
+    const remainingProjects = await loadProjects();
+    if (deletingSelectedProject) {
+      const nextProject = remainingProjects[0] || null;
+      setSelectedProject(nextProject);
+      if (!nextProject) localStorage.removeItem(STORAGE_SELECTED_PROJECT_ID);
+      if (deletingActiveTask) clearActiveTaskChat();
+    }
+    return true;
+  }
+
   async function handleStartTask(task, mode) {
     const requestedMode = mode || (adapters[0] || DEFAULT_ADAPTERS[0]).name;
     const requestedLabel = adapters.find((item) => item.name === requestedMode)?.label || requestedMode;
@@ -526,6 +547,7 @@ export default function App() {
                   onSelect={setSelectedProject}
                   onCreateProject={handleCreateProject}
                   onUpdateProject={handleUpdateProject}
+                  onDeleteProject={handleDeleteProject}
                   mobile
                 />
               )}
@@ -543,6 +565,7 @@ export default function App() {
               onSelect={setSelectedProject}
               onCreateProject={handleCreateProject}
               onUpdateProject={handleUpdateProject}
+              onDeleteProject={handleDeleteProject}
             />
             <div className="flex flex-col flex-1 min-w-0 min-h-0">
               <TaskBoard tasks={tasks} adapters={adapters} onOpenTerminal={handleOpenTask} onStartTask={handleStartTask} onDeleteTask={handleDeleteTask} onCreateTask={handleCreateTask} />
